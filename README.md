@@ -15,7 +15,7 @@ modelpulse server ./shards                   modelpulse bridge run http://100.10
   │                                         │  4. llama.cpp loads from /dev/shm
   │                                         │  5. run inference, stream tokens
   └── POST /metrics  ◄────────────────────  │  6. send collected metrics
-
+```
 
 ---
 
