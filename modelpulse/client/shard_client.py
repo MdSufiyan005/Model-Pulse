@@ -1,5 +1,5 @@
 """
-modelpulse.edge_device.shard_client
+modelpulse.client.shard_client
 Async HTTP client — pulls manifest and individual shards from Device A,
 and POSTs metrics back.
 """

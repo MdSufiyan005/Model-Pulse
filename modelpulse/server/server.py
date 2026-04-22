@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
-from contextlib import asynccontextmanager
 from pathlib import Path
+from contextlib import asynccontextmanager
 from typing import Any
 
-import ngrok
 import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -22,34 +20,10 @@ def create_app(
     metrics_log: Path,
     *,
     port: int = 8000,
-    enable_ngrok: bool = False,
-    ngrok_domain: str | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        listener = None
-        try:
-            if enable_ngrok:
-                authtoken = os.getenv("NGROK_AUTHTOKEN", "")
-                if authtoken:
-                    ngrok.set_auth_token(authtoken)
-
-                tunnel_kwargs: dict[str, Any] = {}
-                domain = ngrok_domain or os.getenv("NGROK_DOMAIN")
-                if domain:
-                    tunnel_kwargs["domain"] = domain
-
-                listener = await ngrok.forward(port, **tunnel_kwargs)
-
-                _console.print(
-                    f"  [green]✓[/green]  ngrok tunnel: [cyan]{listener.url()}[/cyan]"
-                )
-
-            yield
-        finally:
-            if listener is not None:
-                await ngrok.disconnect()
-
+        yield
 
     app = FastAPI(title="modelpulse / Device A", version="0.1.0", lifespan=lifespan)
 
@@ -104,7 +78,10 @@ def create_app(
     def get_latest_result():
         if not metrics_log.exists():
             raise HTTPException(status_code=404, detail="No metrics recorded yet")
-        lines = [l for l in metrics_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        lines = [
+            l for l in metrics_log.read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
         if not lines:
             raise HTTPException(status_code=404, detail="No metrics recorded yet")
         return json.loads(lines[-1])
@@ -124,11 +101,10 @@ def run(
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(8000, help="Port to listen on"),
     metrics_log: Path = typer.Option(
-        Path("metrics.jsonl"), help="File to append metrics received from Device B"
+        Path("metrics.jsonl"),
+        help="File to append metrics received from Device B",
     ),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload (dev only)"),
-    ngrok_enable: bool = typer.Option(False, "--ngrok", help="Expose the server through ngrok"),
-    ngrok_domain: str = typer.Option("", help="Optional reserved ngrok domain"),
 ):
     shard_dir = shard_dir.resolve()
 
@@ -136,8 +112,6 @@ def run(
         shard_dir,
         metrics_log,
         port=port,
-        enable_ngrok=ngrok_enable,
-        ngrok_domain=ngrok_domain or None,
     )
 
     uvicorn.run(
@@ -145,7 +119,7 @@ def run(
         host=host,
         port=port,
         reload=reload,
-        log_level="info"
+        log_level="info",
     )
 
 

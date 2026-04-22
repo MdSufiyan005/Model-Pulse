@@ -1,5 +1,5 @@
 """
-modelpulse.edge_device.cli
+modelpulse.client.cli
 Device B CLI — Claude Code-inspired clean TUI.
 
 Commands

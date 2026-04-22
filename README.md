@@ -39,6 +39,8 @@ modelpulse server ./shards                   modelpulse bridge run http://100.10
 Install `ModelPulse` as a Python package directly from GitHub:
 ```bash
 pip install git+https://github.com/MdSufiyan005/Model-Pulse.git
+or
+pip install modelpulse
 ```
 
 
@@ -152,7 +154,7 @@ modelpulse/
 │   ├── server/          # Server side
 │   │   ├── __init__.py
 │   │   └── server.py      # FastAPI server
-│   └── edge_device/          # Client side
+│   └── client/          # Client side
 │       ├── __init__.py
 │       ├── cli.py         # Bridge CLI
 │       ├── bridge.py      # RAM GGUF assembly + llama.cpp

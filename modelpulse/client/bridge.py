@@ -1,5 +1,5 @@
 """
-modelpulse.edge_device.bridge
+modelpulse.client.bridge
 In-memory GGUF assembly + llama.cpp inference wrapper.
 
 Zero-disk strategy

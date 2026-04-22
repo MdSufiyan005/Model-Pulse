@@ -1,5 +1,11 @@
-/.venv
-/test
-metrics.jsonl
+.venv/
+dist/
+build/
+*.egg-info/
 *.pyc
+__pycache__/
+metrics.jsonl
+notes.txt
+test/
+modelpulse.egg-info
 notes.txt
