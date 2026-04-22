@@ -26,15 +26,14 @@ dependencies = [
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
   "rich>=13.7",
+  "llama-cpp-python>=0.2.90",
 ]
 
 [project.optional-dependencies]
 client = [
-  "llama-cpp-python>=0.2.90",
   "psutil>=5.9",
 ]
 all = [
-  "llama-cpp-python>=0.2.90",
   "psutil>=5.9",
 ]
 dev = [
