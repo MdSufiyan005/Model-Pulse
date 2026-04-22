@@ -1,5 +1,5 @@
 """
-shard_inference.device_b.bridge
+modelpulse.device_b.bridge
 In-memory GGUF assembly + llama.cpp inference wrapper.
 
 Zero-disk strategy

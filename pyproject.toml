@@ -52,9 +52,9 @@ dev = [
 ]
 
 [project.scripts]
-modelpulse = "shard_inference.main:main"
-shard-server = "shard_inference.device_a.server:main"
-shard-bridge = "shard_inference.device_b.cli:main"
+modelpulse = "modelpulse.main:main"
+shard-server = "modelpulse.device_a.server:main"
+shard-bridge = "modelpulse.device_b.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/MdSufiyan005/ModelPulse"
@@ -62,4 +62,4 @@ Source = "https://github.com/MdSufiyan005/ModelPulse"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["shard_inference*"]
+include = ["modelpulse*"]

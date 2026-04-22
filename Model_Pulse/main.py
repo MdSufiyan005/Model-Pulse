@@ -1,6 +1,6 @@
 import typer
-from shard_inference.device_b import cli as bridge_cli
-from shard_inference.device_a import server as server_cli
+from modelpulse.device_b import cli as bridge_cli
+from modelpulse.device_a import server as server_cli
 
 app = typer.Typer(
     name="modelpulse",

@@ -1,5 +1,5 @@
 """
-shard_inference.device_a.server
+modelpulse.device_a.server
 FastAPI shard-server for Device A.
 
 Endpoints

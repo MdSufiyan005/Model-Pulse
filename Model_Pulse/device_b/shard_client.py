@@ -1,5 +1,5 @@
 """
-shard_inference.device_b.shard_client
+modelpulse.device_b.shard_client
 Async HTTP client — pulls manifest and individual shards from Device A,
 and POSTs metrics back.
 """
@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 import httpx
 
-from shard_inference.shared.models import InferenceMetrics, ShardManifest
+from modelpulse.shared.models import InferenceMetrics, ShardManifest
 
 
 class ShardClient:

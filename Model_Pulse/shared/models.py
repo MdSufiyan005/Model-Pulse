@@ -1,5 +1,5 @@
 """
-shard_inference.shared.models
+modelpulse.shared.models
 Shared dataclasses used by both Device A and Device B.
 """
 from __future__ import annotations

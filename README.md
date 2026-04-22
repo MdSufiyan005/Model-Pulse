@@ -208,7 +208,7 @@ Run uvicorn on port 8001, nginx on 8000.
 ## Project layout
 
 ```
-shard_inference/
+modelpulse/
 ├── shared/
 │   └── models.py          ShardManifest, InferenceMetrics
 ├── device_a/
