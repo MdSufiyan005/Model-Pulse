@@ -133,6 +133,7 @@ shard_data  ─── assemble_gguf_bytes() ──► gguf_bytes (RAM)
 This keeps the model file temporarly on the ram, while still satisfying llama.cpp’s file-path requirement.
 
 The system prioritizes /dev/shm and /run/shm by checking for existence and write access, falling back to $TMPDIR or /tmp if no RAM-backed filesystem is available.
+
 ---
 
 ## 📁 Project Layout
