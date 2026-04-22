@@ -35,9 +35,9 @@ from rich.text import Text
 from rich.theme import Theme
 from rich import box
 
-from Model_Pulse.device_b.shard_client import ShardClient
-from Model_Pulse.device_b.bridge import ShardBridge
-from Model_Pulse.shared.models import InferenceMetrics, ShardManifest
+from modelpulse.device_b.shard_client import ShardClient
+from modelpulse.device_b.bridge import ShardBridge
+from modelpulse.shared.models import InferenceMetrics, ShardManifest
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 _THEME = Theme(

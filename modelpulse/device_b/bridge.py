@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-from Model_Pulse.shared.models import InferenceMetrics, ShardManifest
+from modelpulse.shared.models import InferenceMetrics, ShardManifest
 
 
 # ── Tmpfs discovery ──────────────────────────────────────────────────────────
