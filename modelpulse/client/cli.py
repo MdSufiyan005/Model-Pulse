@@ -1,5 +1,5 @@
 """
-modelpulse.device_b.cli
+modelpulse.edge_device.cli
 Device B CLI — Claude Code-inspired clean TUI.
 
 Commands
@@ -34,8 +34,8 @@ from rich.text import Text
 from rich.theme import Theme
 from rich import box
 
-from modelpulse.device_b.shard_client import ShardClient
-from modelpulse.device_b.bridge import ShardBridge
+from modelpulse.client.shard_client import ShardClient
+from modelpulse.client.bridge import ShardBridge
 from modelpulse.shared.models import InferenceMetrics, ShardManifest
 
 # ── Theme ─────────────────────────────────────────────────────────────────────

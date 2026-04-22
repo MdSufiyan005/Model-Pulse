@@ -1,4 +1,2 @@
 [console_scripts]
 modelpulse = modelpulse.main:main
-shard-bridge = modelpulse.device_b.cli:main
-shard-server = modelpulse.device_a.server:main

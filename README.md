@@ -1,4 +1,3 @@
-````markdown
 # ModelPulse 🚀
 
 **End-to-end partial-weight transfer pipeline.**
@@ -8,15 +7,15 @@ Device A serves model shards → Device B reconstructs the GGUF in RAM and runs 
 ```ascii
 Device A                                      Device B
 ────────────────────                          ───────────────────────────────────
-modelpulse server ./shards                   modelpulse bridge run http://192.168.1.10:8000
-  │                                           │
-  ├── GET /manifest  ◄────────────────────  │  1. fetch manifest
-  ├── GET /shards/*   ◄────────────────────  │  2. pull all shards (streaming)
+modelpulse server ./shards                   modelpulse bridge run http://100.101.102.103:8000
+  │                                         │
+  ├── GET /manifest  ─────────────────────► │  1. fetch manifest
+  ├── GET /shards/*  ─────────────────────► │  2. pull all shards (streaming)
   │                                         │  3. assemble GGUF in RAM → /dev/shm
   │                                         │  4. llama.cpp loads from /dev/shm
   │                                         │  5. run inference, stream tokens
-  └── POST /metrics   ◄────────────────────  │  6. send collected metrics
-````
+  └── POST /metrics  ◄────────────────────  │  6. send collected metrics
+
 
 ---
 
@@ -53,16 +52,26 @@ Use `gguf_to_shards.py` from the companion tools to convert your GGUF model:
 python tools/gguf_to_shards.py convert model.gguf ./shards/
 ```
 
-### 2 — Start the server on Device A
+### 2 — Start the server on server
 
 ```bash
-modelpulse server run ./shards
+modelpulse server run ./shards --host 0.0.0.0 --port 8000
+```
+### 3.0 - getting talescale ip
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+
+sudo tailscale up # signup on the page
+
+tailscale ip # get the ip address - eg: 100.101.102.103
+
 ```
 
-### 3 — Run inference on Device B
+
+### 3.1 — Run inference on edge device
 
 ```bash
-modelpulse bridge run http://192.168.1.10:8000
+modelpulse bridge run http://100.101.102.103:8000
 ```
 
 ---
@@ -139,10 +148,10 @@ modelpulse/
 │   ├── shared/            # Shared models
 │   │   ├── __init__.py
 │   │   └── models.py      # ShardManifest, InferenceMetrics
-│   ├── device_a/          # Server side
+│   ├── server/          # Server side
 │   │   ├── __init__.py
 │   │   └── server.py      # FastAPI server
-│   └── device_b/          # Client side
+│   └── edge_device/          # Client side
 │       ├── __init__.py
 │       ├── cli.py         # Bridge CLI
 │       ├── bridge.py      # RAM GGUF assembly + llama.cpp
@@ -152,8 +161,4 @@ modelpulse/
 │   └── gguf_to_shards.py  # GGUF → shard converter
 ```
 
----
-
-**Ready to shard your models across devices with RAM-only inference?**
-Run the commands above and stream tokens without rebuilding GGUF on persistent storage. ✨
 

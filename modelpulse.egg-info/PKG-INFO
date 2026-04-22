@@ -15,203 +15,140 @@ Classifier: Operating System :: POSIX :: Linux
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: httpx>=0.27
-Provides-Extra: server
-Requires-Dist: fastapi>=0.111; extra == "server"
-Requires-Dist: uvicorn[standard]>=0.30; extra == "server"
-Requires-Dist: typer>=0.12; extra == "server"
-Requires-Dist: rich>=13.7; extra == "server"
-Provides-Extra: client
-Requires-Dist: llama-cpp-python>=0.2.90; extra == "client"
-Requires-Dist: psutil>=5.9; extra == "client"
-Requires-Dist: rich>=13.7; extra == "client"
-Requires-Dist: typer>=0.12; extra == "client"
-Provides-Extra: all
-Requires-Dist: httpx>=0.27; extra == "all"
-Requires-Dist: fastapi>=0.111; extra == "all"
-Requires-Dist: uvicorn[standard]>=0.30; extra == "all"
-Requires-Dist: typer>=0.12; extra == "all"
-Requires-Dist: rich>=13.7; extra == "all"
-Requires-Dist: llama-cpp-python>=0.2.90; extra == "all"
-Requires-Dist: psutil>=5.9; extra == "all"
+Requires-Dist: typer>=0.12
+Requires-Dist: fastapi>=0.111
+Requires-Dist: uvicorn[standard]>=0.30
+Requires-Dist: rich>=13.7
+Requires-Dist: llama-cpp-python>=0.2.90
+Requires-Dist: psutil>=5.9
 Provides-Extra: dev
 Requires-Dist: pytest>=8; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
 
-# modelpulse
+# ModelPulse 🚀
 
-Shard-aware LLM inference bridge for edge devices (RPi, Jetson Nano, x86 Linux).
+**End-to-end partial-weight transfer pipeline.**
 
-Device A shares model shards → Device B loads and runs inference with **zero GGUF reconstruction on disk**.
+Device A serves model shards → Device B reconstructs the GGUF in RAM and runs inference with **no persistent GGUF reconstruction on disk**.
 
-```
-Device A                                  Device B
-────────────────────                      ───────────────────────────────────
-shard-server ./shards                     shard-bridge run http://192.168.1.10:8000
+```ascii
+Device A                                      Device B
+────────────────────                          ───────────────────────────────────
+modelpulse server ./shards                   modelpulse bridge run http://100.101.102.103:8000
   │                                         │
-  ├── GET /manifest  ◄────────────────────  │  1. fetch manifest
-  ├── GET /shards/*  ◄────────────────────  │  2. pull all shards (streaming)
+  ├── GET /manifest  ─────────────────────► │  1. fetch manifest
+  ├── GET /shards/*  ─────────────────────► │  2. pull all shards (streaming)
   │                                         │  3. assemble GGUF in RAM → /dev/shm
   │                                         │  4. llama.cpp loads from /dev/shm
   │                                         │  5. run inference, stream tokens
   └── POST /metrics  ◄────────────────────  │  6. send collected metrics
-```
+
 
 ---
 
-## Install
+## 📸 Screenshots
+
+**Server (Device A)**
+![Modelpulse-Server](Images/server.png)
+
+**Bridge (Device B)**
+![Modelpulse-Bridge](Images/bridge.png)
+
+**Inference in Progress**
+![Running Inference](Images/running_bridge.png)
+
+**Metrics Sent Back**
+![Sending Benchmark data](Images/sending_metrics.png)
+
+---
+
+## 📦 Install
 
 ```bash
-# On Device A (the model server)
-pip install "modelpulse[server]"
-
-# On Device B (the inference client)
-pip install "modelpulse[client]"
-
-# Both on one machine (dev / testing)
-pip install "modelpulse[all]"
+pip install modelpulse
 ```
 
-> **llama-cpp-python on ARM:** Follow the [official build guide](https://github.com/abetlen/llama-cpp-python)
-> for RPi / Jetson.  Pre-built wheels exist for common targets.
 
----
-
-## Workflow
+## 🔄 Workflow
 
 ### 1 — Prepare shards on Device A
 
 Use `gguf_to_shards.py` from the companion tools to convert your GGUF model:
 
 ```bash
-python gguf_to_shards.py convert llama-3.2-1b-instruct.Q4_K_M.gguf ./shards/
+python tools/gguf_to_shards.py convert model.gguf ./shards/
 ```
 
-### 2 — Start the server on Device A
+### 2 — Start the server on server
 
 ```bash
-shard-server ./shards --port 8000
+modelpulse server run ./shards --host 0.0.0.0 --port 8000
 ```
+### 3.0 - getting talescale ip
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+
+sudo tailscale up # signup on the page
+
+tailscale ip # get the ip address - eg: 100.101.102.103
 
 ```
-  ◆ shard-server  v0.1.0
 
-  ✓  llama-3.2-1b-instruct.Q4_K_M.gguf  272 shards · 1.07 GB
-  >  listening on http://0.0.0.0:8000
-  >  metrics log  metrics.jsonl
-```
 
-### 3 — Run inference on Device B
+### 3.1 — Run inference on edge device
 
 ```bash
-shard-bridge run http://192.168.1.10:8000
-```
-
-```
-  ◆ shard-bridge  v0.1.0
-
-  >  connecting to http://192.168.1.10:8000
-  ✓  reachable  11 ms
-  >  fetching manifest
-  ✓  llama-3.2-1b-instruct.Q4_K_M.gguf  272 tensors · 1.07 GB · GGUF v3
-
-  ⠸ pulling shards ━━━━━━━━━━━━━━━━━━━━  [272/272]  1070 MB  28.4s
-  ✓  all shards in memory  1070 MB · 28.4 s
-
-  >  assembling GGUF in memory
-  >  writing 1070 MB → /dev/shm/sb_12345.gguf
-  >  loading model via llama.cpp (n_ctx=2048)
-  ✓  model loaded  2.1 s · RAM +1.1 GB
-
-  ──────────────────────────────────────────────────
-
-  Prompt › tell me about edge computing
-
-  >  generating
-
-  Edge computing is a distributed computing paradigm that brings
-  computation and data storage closer to the sources of data…
-
-  ✓  156 tokens · 12.4 tok/s · TTFT 0.31 s
-
-  ──────────────────────────────────────────────────
-
-  metrics
-
-    load_time_s             2.14 s
-    ram_delta_mb            1131 MB
-    tokens_per_sec          12.4
-    time_to_first_tok_s     0.310 s
-    tokens_generated        156
-    cpu_percent             94.2 %
-    ram_used_mb             2980 MB
-    cpu_temp_c              71.3 °C
-    device_hw               Raspberry Pi 4 Model B Rev 1.4
-    os_info                 Linux 6.1.21-v8+ aarch64
-
-  ──────────────────────────────────────────────────
-
-  >  sending metrics → http://192.168.1.10:8000/metrics
-  ✓  received  (entries on Device A: 1)
+modelpulse bridge run http://100.101.102.103:8000
 ```
 
 ---
 
-## Commands
+## 📋 Commands
 
-### Device A
+### Device A (Server)
 
-| Command | Description |
-|---|---|
-| `shard-server <dir>` | Start the shard server |
-| `--port INT` | Port (default: 8000) |
-| `--host STR` | Bind address (default: 0.0.0.0) |
-| `--metrics-log PATH` | Where to append received metrics (default: metrics.jsonl) |
-
-### Device B
-
-| Command | Description |
-|---|---|
-| `shard-bridge run <host>` | Full pipeline: pull → infer → report |
-| `shard-bridge pull <host>` | Pull shards to disk (no inference) |
-| `shard-bridge status <host>` | Display latest metrics from Device A |
-
-#### `run` options
-
-| Flag | Default | Description |
-|---|---|---|
-| `--prompt / -p` | *(interactive)* | Prompt string |
-| `--max-tokens / -n` | 256 | Tokens to generate |
-| `--temp / -t` | 0.7 | Sampling temperature |
-| `--ctx` | 2048 | Context window |
-| `--no-report` | false | Skip sending metrics |
-
----
-
-## Metrics collected
-
-| Metric | Description |
-|---|---|
-| `load_time_s` | Time from shard pull to model ready |
-| `ram_delta_mb` | RAM consumed by the model |
-| `tokens_per_sec` | Inference throughput |
-| `time_to_first_tok_s` | Latency to first token |
-| `cpu_temp_c` | CPU temperature (RPi / Jetson thermal zone) |
-| `cpu_percent` | CPU utilisation during inference |
-| `ram_used_mb` | Total RAM used on device |
-| `perplexity` | (optional) quality proxy |
-| `device_hw` | Auto-detected hardware string |
-| `os_info` | OS + kernel + arch |
-
----
-
-## Zero-disk strategy
-
+```bash
+modelpulse server run <shards_dir> [options]
 ```
+
+| Option           | Default         | Description              |
+| ---------------- | --------------- | ------------------------ |
+| `--port`         | `8000`          | Server port              |
+| `--host`         | `0.0.0.0`       | Bind address             |
+| `--metrics-log`  | `metrics.jsonl` | Metrics log file         |
+
+### Device B (Client)
+
+```bash
+modelpulse bridge run <host> [options]
+modelpulse bridge status <host> [--all]
+```
+
+| Command  | Description                          |
+| -------- | ------------------------------------ |
+| `run`    | Full pipeline: pull → infer → report |
+| `status` | Display latest metrics from Device A |
+
+#### Bridge `run` options
+
+| Flag            | Default         | Description          |
+| --------------- | --------------- | -------------------- |
+| `--prompt / -p` | *(interactive)* | Prompt string        |
+| `--max-tokens`  | `256`           | Tokens to generate   |
+| `--temp / -t`   | `0.7`           | Sampling temperature |
+| `--ctx`         | `2048`          | Context window       |
+| `--no-report`   | `false`         | Skip sending metrics |
+
+---
+
+## 💾 Zero-Disk Strategy
+
+```text
 shard_data  ─── assemble_gguf_bytes() ──► gguf_bytes (RAM)
                                               │
                                        write_bytes()
                                               │
-                                        /dev/shm/sb_<pid>.gguf   ← tmpfs, never hits disk
+                                        /dev/shm/sb_<pid>.gguf   ← tmpfs, never touches physical disk
                                               │
                                        del gguf_bytes            ← Python bytes freed
                                               │
@@ -220,40 +157,35 @@ shard_data  ─── assemble_gguf_bytes() ──► gguf_bytes (RAM)
                                        cleanup() → unlink()
 ```
 
-Peak RAM ≈ **2× model size** during assembly (Python bytes + tmpfs copy).
-After llama.cpp loads, Python bytes are GC'd and usage drops back to **~1× model size**.
+This keeps the model file temporarly on the ram, while still satisfying llama.cpp’s file-path requirement.
 
+The system prioritizes /dev/shm and /run/shm by checking for existence and write access, falling back to $TMPDIR or /tmp if no RAM-backed filesystem is available.
 ---
 
-## nginx reverse-proxy (optional)
+## 📁 Project Layout
 
-```nginx
-server {
-    listen 8000;
-    client_max_body_size 0;
-
-    location / {
-        proxy_pass         http://127.0.0.1:8001;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-    }
-}
-```
-
-Run uvicorn on port 8001, nginx on 8000.
-
----
-
-## Project layout
-
-```
+```bash
 modelpulse/
-├── shared/
-│   └── models.py          ShardManifest, InferenceMetrics
-├── device_a/
-│   └── server.py          FastAPI server  (shard-server CLI)
-└── device_b/
-    ├── shard_client.py    Async HTTP client
-    ├── bridge.py          In-memory GGUF assembly + llama.cpp wrapper
-    └── cli.py             TUI CLI  (shard-bridge CLI)
+├── pyproject.toml          # Packaging config
+├── README.md               # This doc
+├── Images/                 # Screenshots (server.png, bridge.png, etc.)
+├── modelpulse/             # Core package
+│   ├── __init__.py
+│   ├── main.py            # Unified CLI: modelpulse bridge, modelpulse server
+│   ├── shared/            # Shared models
+│   │   ├── __init__.py
+│   │   └── models.py      # ShardManifest, InferenceMetrics
+│   ├── server/          # Server side
+│   │   ├── __init__.py
+│   │   └── server.py      # FastAPI server
+│   └── edge_device/          # Client side
+│       ├── __init__.py
+│       ├── cli.py         # Bridge CLI
+│       ├── bridge.py      # RAM GGUF assembly + llama.cpp
+│       └── shard_client.py # Async HTTP client
+├── tools/                 # Utilities
+│   ├── gguf_parser.py
+│   └── gguf_to_shards.py  # GGUF → shard converter
 ```
+
+

@@ -18,3 +18,10 @@ server {
 Run uvicorn on port 8001, nginx on 8000.
 
 > **llama-cpp-python on ARM:** Follow the [official build guide](https://github.com/abetlen/llama-cpp-python) for RPi / Jetson. Pre-built wheels exist for common targets.
+
+
+⚡ Why Tailscale?
+Direct peer-to-peer (P2P) connection (no relay bottleneck)
+Near-local network speeds for large shard transfers
+No bandwidth limits (unlike tunneling services)
+Works across NAT/firewalls without manual port forwarding

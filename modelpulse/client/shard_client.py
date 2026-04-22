@@ -1,5 +1,5 @@
 """
-modelpulse.device_b.shard_client
+modelpulse.edge_device.shard_client
 Async HTTP client — pulls manifest and individual shards from Device A,
 and POSTs metrics back.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import time
 from typing import Callable, Optional
-
+import struct
 import httpx
 
 from modelpulse.shared.models import InferenceMetrics, ShardManifest
@@ -79,7 +79,7 @@ class ShardClient:
 
         Args:
             filename:        e.g. "blk.0.attn_q.weight.shard"
-            expected_sha256: if given, verifies integrity after download
+            expected_sha256: if given, verifies RAW TENSOR DATA integrity
             on_progress:     callback(bytes_received, total_bytes)
         """
         client = await self._get_client()
@@ -98,7 +98,14 @@ class ShardClient:
         data = b"".join(chunks)
 
         if expected_sha256:
-            actual = hashlib.sha256(data).hexdigest()
+            # Extract RAW TENSOR DATA (skip SHRD header + JSON)
+            if len(data) >= 12 and data[:4] == b"SHRD":
+                hdr_len = struct.unpack("<I", data[8:12])[0]
+                payload = data[12 + hdr_len:]
+            else:
+                payload = data  # Fallback for raw shards
+                
+            actual = hashlib.sha256(payload).hexdigest()
             if actual != expected_sha256:
                 raise ValueError(
                     f"SHA-256 mismatch for {filename!r}\n"

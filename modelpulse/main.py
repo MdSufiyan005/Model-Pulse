@@ -1,6 +1,6 @@
 import typer
-from modelpulse.device_b import cli as bridge_cli
-from modelpulse.device_a import server as server_cli
+from modelpulse.client import cli as bridge_cli
+from modelpulse.server import server as server_cli
 
 app = typer.Typer(
     name="modelpulse",
