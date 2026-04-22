@@ -4,9 +4,9 @@ Device B CLI — Claude Code-inspired clean TUI.
 
 Commands
 ────────
-  shard-bridge run    <host>  [options]   Full pipeline: pull → load → infer → report
-  shard-bridge status <host>              Fetch + display latest metrics from Device A
-  shard-bridge pull   <host>  [options]   Pull shards only (no inference)
+  modelpulse bridge run    <host>  [options]   Full pipeline: pull → load → infer → report
+  modelpulse bridge status <host>              Fetch + display latest metrics from Device A
+  modelpulse bridge pull   <host>  [options]   Pull shards only (no inference)
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ _THEME = Theme(
 console  = Console(theme=_THEME, highlight=False)
 error_console = Console(theme=_THEME, highlight=False, stderr=True)
 app      = typer.Typer(
-    name="shard-bridge",
+    name="bridge",
     add_completion=False,
     no_args_is_help=True,
     rich_markup_mode=None,
@@ -67,7 +67,7 @@ app      = typer.Typer(
 
 def _header() -> None:
     console.print()
-    console.print("  [hdr]◆ shard-bridge[/hdr]  [dim]v0.1.0[/dim]")
+    console.print("  [hdr]◆ modelpulse bridge[/hdr]  [dim]v0.1.0[/dim]")
     console.print()
 
 
@@ -207,7 +207,7 @@ async def _pull_shards(
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  shard-bridge run                                                        ║
+# ║  modelpulse bridge run                                                   ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 @app.command()
@@ -347,7 +347,7 @@ async def _run_async(
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  shard-bridge pull                                                       ║
+# ║  modelpulse bridge pull                                                  ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 @app.command()
@@ -407,7 +407,7 @@ async def _pull_async(host: str, out_dir: Path) -> None:
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  shard-bridge status                                                     ║
+# ║  modelpulse bridge status                                                ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 @app.command()

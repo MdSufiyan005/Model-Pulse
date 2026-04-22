@@ -38,8 +38,6 @@ dev = [
 
 [project.scripts]
 modelpulse = "modelpulse.main:main"
-shard-server = "modelpulse.device_a.server:main"
-shard-bridge = "modelpulse.device_b.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/MdSufiyan005/ModelPulse"

@@ -4,7 +4,7 @@ from modelpulse.device_a import server as server_cli
 
 app = typer.Typer(
     name="modelpulse",
-    help="Unified CLI for shard-aware LLM inference on edge devices.",
+    help="Unified CLI for end to end partial-weight transfer pipeline.",
     add_completion=False,
     no_args_is_help=True,
 )

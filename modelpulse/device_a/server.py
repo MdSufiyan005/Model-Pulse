@@ -1,6 +1,6 @@
 """
 modelpulse.device_a.server
-FastAPI shard-server for Device A.
+FastAPI server for Device A.
 
 Endpoints
 ─────────
@@ -12,7 +12,7 @@ Endpoints
   GET  /results/latest      most recent metric entry
 
 Usage (CLI):
-  shard-server ./shards_dir --port 8000
+  modelpulse server run ./shards_dir --port 8000
 
 nginx tip:
   Point nginx as a reverse-proxy to uvicorn (port 8000) and set
@@ -33,14 +33,14 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
-cli = typer.Typer(name="shard-server", add_completion=False)
+cli = typer.Typer(name="server", add_completion=False)
 _console = Console(highlight=False)
 
 
 # ── App factory ──────────────────────────────────────────────────────────────
 
 def create_app(shard_dir: Path, metrics_log: Path) -> FastAPI:
-    app = FastAPI(title="shard-bridge / Device A", version="0.1.0")
+    app = FastAPI(title="modelpulse / Device A", version="0.1.0")
 
     # ── health ────────────────────────────────────────────────────────────────
     @app.get("/health")
@@ -135,15 +135,15 @@ def run_server(
     reload: bool = typer.Option(False, "--reload", help="Auto-reload (dev only)"),
 ):
     """
-    Start the Device A shard server.
+    Start the Device A server.
 
     Example:
-      shard-server ./my_shards --port 8000
+      modelpulse server run ./my_shards --port 8000
     """
     shard_dir = shard_dir.resolve()
 
     _console.print()
-    _console.print("  [bold]◆ shard-server[/bold]  [dim]v0.1.0[/dim]")
+    _console.print("  [bold]◆ modelpulse server[/bold]  [dim]v0.1.0[/dim]")
     _console.print()
 
     manifest_path = shard_dir / "manifest.json"

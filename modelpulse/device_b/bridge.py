@@ -12,7 +12,7 @@ Zero-disk strategy
   5.  The in-memory bytes object is immediately deleted; GC reclaims it.
   6.  cleanup() unlinks the tmpfs file when done.
 
-Peak RAM ≈ 2× model size during assembly, dropping to ~1× after step 5.
+
 """
 from __future__ import annotations
 
