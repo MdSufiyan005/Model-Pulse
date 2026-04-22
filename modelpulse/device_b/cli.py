@@ -6,7 +6,6 @@ Commands
 ────────
   modelpulse bridge run    <host>  [options]   Full pipeline: pull → load → infer → report
   modelpulse bridge status <host>              Fetch + display latest metrics from Device A
-  modelpulse bridge pull   <host>  [options]   Pull shards only (no inference)
 """
 from __future__ import annotations
 
@@ -220,13 +219,12 @@ def run(
     max_tokens: int = typer.Option(256, "--max-tokens", "-n", help="Max tokens to generate"),
     temperature: float = typer.Option(0.7, "--temp", "-t", help="Sampling temperature"),
     n_ctx: int = typer.Option(2048, "--ctx", help="Context window size"),
-    no_report: bool = typer.Option(False, "--no-report", help="Skip sending metrics to Device A"),
 ):
     """
     Full pipeline on Device B:
       pull shards → assemble in RAM → load model → run inference → report metrics
     """
-    asyncio.run(_run_async(host, prompt, max_tokens, temperature, n_ctx, no_report))
+    asyncio.run(_run_async(host, prompt, max_tokens, temperature, n_ctx))
 
 
 async def _run_async(
@@ -235,7 +233,6 @@ async def _run_async(
     max_tokens: int,
     temperature: float,
     n_ctx: int,
-    no_report: bool,
 ) -> None:
     _header()
 
@@ -332,77 +329,17 @@ async def _run_async(
     _metrics_panel(metrics)
 
     # ── 7. Report ─────────────────────────────────────────────────────────────
-    if not no_report:
-        _rule()
-        _step(f"sending metrics → [val]{host}/metrics[/val]")
-        metrics.server_url = host
-        try:
-            resp = await client.post_metrics(metrics)
-            _ok(f"received  [dim](entries on Device A: {resp.get('entries', '?')})[/dim]")
-        except Exception as exc:
-            _warn(f"could not send metrics — {exc}")
+    # if not no_report:
+    #     _rule()
+    #     _step(f"sending metrics → [val]{host}/metrics[/val]")
+    #     metrics.server_url = host
+    #     try:
+    #         resp = await client.post_metrics(metrics)
+    #         _ok(f"received  [dim](entries on Device A: {resp.get('entries', '?')})[/dim]")
+    #     except Exception as exc:
+    #         _warn(f"could not send metrics — {exc}")
 
     await client.aclose()
-    console.print()
-
-
-# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  modelpulse bridge pull                                                  ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-@app.command()
-def pull(
-    host: str = typer.Argument(..., metavar="HOST", help="Device A base URL"),
-    out_dir: Path = typer.Option(
-        Path("./shards"),
-        "--out", "-o",
-        help="Directory to write .shard files + manifest",
-    ),
-):
-    """
-    Pull shards from Device A and save to disk (no inference).
-    Useful for pre-staging shards on Device B before going offline.
-    """
-    asyncio.run(_pull_async(host, out_dir))
-
-
-async def _pull_async(host: str, out_dir: Path) -> None:
-    _header()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    client, manifest = await _connect(host)
-    shard_data = await _pull_shards(client, manifest)
-    await client.aclose()
-
-    _step(f"writing shards to [val]{out_dir}[/val]")
-    import json
-
-    for name, entry in manifest.shards.items():
-        (out_dir / entry["file"]).write_bytes(shard_data[name])
-
-    # Write manifest too
-    import dataclasses, json as _json
-    (out_dir / "manifest.json").write_text(
-        _json.dumps(
-            {
-                "version":            manifest.version,
-                "source_model":       manifest.source_model,
-                "gguf_version":       manifest.gguf_version,
-                "alignment":          manifest.alignment,
-                "tensor_count":       manifest.tensor_count,
-                "total_bytes":        manifest.total_bytes,
-                "gguf_metadata_kvs":  manifest.gguf_metadata_kvs,
-                "shards":             manifest.shards,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    _ok(
-        f"saved {len(shard_data)} shards + manifest  "
-        f"[dim]→ {out_dir}[/dim]"
-    )
     console.print()
 
 

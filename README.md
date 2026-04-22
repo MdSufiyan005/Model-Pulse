@@ -85,14 +85,12 @@ modelpulse server run <shards_dir> [options]
 
 ```bash
 modelpulse bridge run <host> [options]
-modelpulse bridge pull <host> [options]
 modelpulse bridge status <host> [--all]
 ```
 
 | Command  | Description                          |
 | -------- | ------------------------------------ |
 | `run`    | Full pipeline: pull → infer → report |
-| `pull`   | Pull shards to disk (no inference)   |
 | `status` | Display latest metrics from Device A |
 
 #### Bridge `run` options
@@ -123,8 +121,9 @@ shard_data  ─── assemble_gguf_bytes() ──► gguf_bytes (RAM)
                                        cleanup() → unlink()
 ```
 
-This keeps the model file ephemeral while still satisfying llama.cpp’s file-path requirement.
+This keeps the model file temporarly on the ram, while still satisfying llama.cpp’s file-path requirement.
 
+The system prioritizes /dev/shm and /run/shm by checking for existence and write access, falling back to $TMPDIR or /tmp if no RAM-backed filesystem is available.
 ---
 
 ## 📁 Project Layout
