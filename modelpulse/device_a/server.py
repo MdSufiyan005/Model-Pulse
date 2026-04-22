@@ -119,7 +119,7 @@ def _count_lines(path: Path) -> int:
 # ── CLI entry-point ──────────────────────────────────────────────────────────
 
 @cli.command()
-def run_server(
+def run(
     shard_dir: Path = typer.Argument(
         ...,
         help="Directory that contains manifest.json and .shard files",
