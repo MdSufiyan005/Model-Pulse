@@ -36,9 +36,9 @@ modelpulse server ./shards                   modelpulse bridge run http://100.10
 ---
 
 ## 📦 Install
-
+Install `ModelPulse` as a Python package directly from GitHub:
 ```bash
-pip install modelpulse
+pip install git+https://github.com/MdSufiyan005/Model-Pulse.git
 ```
 
 
