@@ -1,5 +1,4 @@
 """
-modelpulse.client.bridge
 In-memory GGUF assembly + llama.cpp inference wrapper.
 
 Zero-disk strategy
@@ -24,7 +23,7 @@ from typing import Callable, Iterator, Optional
 from modelpulse.shared.models import InferenceMetrics, ShardManifest
 
 
-# ── Tmpfs discovery ──────────────────────────────────────────────────────────
+#  Tmpfs discovery
 
 _TMPFS_CANDIDATES = ["/dev/shm", "/run/shm"]
 
@@ -37,7 +36,7 @@ def _find_tmpfs() -> Path:
     return Path(os.environ.get("TMPDIR", "/tmp"))
 
 
-# ── GGUF value writer ────────────────────────────────────────────────────────
+#  GGUF value writer 
 
 def _write_gguf_value(
     buf: bytearray,
@@ -87,7 +86,7 @@ def _write_gguf_value(
     buf.extend(struct.pack("<" + fmt, value))
 
 
-# ── In-memory GGUF assembly ──────────────────────────────────────────────────
+# In-memory GGUF assembly  
 
 def assemble_gguf_bytes(
     manifest: ShardManifest,
@@ -102,7 +101,7 @@ def assemble_gguf_bytes(
     gguf_version  = manifest.gguf_version
     metadata_kvs  = manifest.gguf_metadata_kvs
 
-    # ── Compute data-section offsets ──────────────────────────────────────────
+    #  Compute data-section offsets  
     running_offset = 0
     offsets: dict[str, int] = {}
     for name in ordered_names:
@@ -118,7 +117,7 @@ def assemble_gguf_bytes(
         buf.extend(struct.pack("<Q", len(b)))
         buf.extend(b)
 
-    # ── GGUF header ───────────────────────────────────────────────────────────
+    #   GGUF header  
     buf.extend(struct.pack("<I", 0x46554747))   # magic "GGUF"
     buf.extend(struct.pack("<I", gguf_version))
 
@@ -130,13 +129,13 @@ def assemble_gguf_bytes(
     else:
         buf.extend(struct.pack("<QQ", tensor_count, kv_count))
 
-    # ── Metadata KV pairs ─────────────────────────────────────────────────────
+    #   Metadata KV pairs  
     for kv in metadata_kvs:
         _str(kv["key"])
         buf.extend(struct.pack("<I", kv["type_id"]))
         _write_gguf_value(buf, kv["type_id"], kv["value"], kv.get("array_elem_type"))
 
-    # ── Tensor info array ─────────────────────────────────────────────────────
+    #   Tensor info array  
     for name in ordered_names:
         entry = manifest.shards[name]
         _str(name)
@@ -151,7 +150,7 @@ def assemble_gguf_bytes(
     if len(buf) % alignment:
         buf.extend(b"\x00" * (alignment - len(buf) % alignment))
 
-    # ── Tensor data ───────────────────────────────────────────────────────────
+    # ── Tensor data  ──────
     written = 0
     for name in ordered_names:
         if written % alignment:
@@ -177,7 +176,7 @@ def assemble_gguf_bytes(
     return bytes(buf)
 
 
-# ── Hardware helpers ─────────────────────────────────────────────────────────
+#  Hardware helpers  
 
 def _read_cpu_temp() -> Optional[float]:
     """Read CPU temperature from Linux thermal zones or psutil."""
@@ -244,7 +243,7 @@ def _system_ram_used_mb() -> float:
         return 0.0
 
 
-# ── ShardBridge ──────────────────────────────────────────────────────────────
+# ShardBridge
 
 class ShardBridge:
     """
@@ -275,7 +274,7 @@ class ShardBridge:
         self._rss_before_load_mb: float  = 0.0
         self._rss_after_load_mb: float   = 0.0
 
-    # ── Perplexity ────────────────────────────────────────────────────────────
+    #  Perplexity
 
     def perplexity(self, text: str) -> float:
         """
@@ -315,7 +314,7 @@ class ShardBridge:
         avg_nll = -sum(vals) / len(vals)
         return math.exp(avg_nll)
 
-    # ── Load ──────────────────────────────────────────────────────────────────
+    #   Load  
 
     def load(
         self,
@@ -350,12 +349,12 @@ class ShardBridge:
 
         t0 = time.perf_counter()
 
-        # ── 1. Assemble ───────────────────────────────────────────────────────
+        #   1. Assemble  
         _emit(on_status, "assembling GGUF in memory")
         gguf_bytes    = assemble_gguf_bytes(self.manifest, self.shard_data)
         gguf_size_mb  = len(gguf_bytes) / 1_048_576
 
-        # ── 2. Write to tmpfs ─────────────────────────────────────────────────
+        #   2. Write to tmpfs  
         _emit(on_status, f"writing {gguf_size_mb:.0f} MB → {self._tmpfs_path}")
         self._tmpfs_path.write_bytes(gguf_bytes)
 
@@ -366,7 +365,7 @@ class ShardBridge:
 
         self._rss_before_load_mb = _proc_rss_mb()
 
-        # ── 3. Load via llama.cpp ─────────────────────────────────────────────
+        #   3. Load via llama.cpp  
         _emit(on_status, f"loading model via llama.cpp  (n_ctx={n_ctx})")
         self._llm = Llama(
             model_path=str(self._tmpfs_path),
@@ -380,7 +379,7 @@ class ShardBridge:
         self._rss_after_load_mb = _proc_rss_mb()
         return self._load_time_s
 
-    # ── RAM delta (load-time property) ───────────────────────────────────────
+    #  RAM delta (load-time property) 
 
     @property
     def ram_delta_mb(self) -> float:
@@ -390,7 +389,7 @@ class ShardBridge:
         """
         return max(0.0, self._rss_after_load_mb - self._rss_before_load_mb)
 
-    # ── Infer ─────────────────────────────────────────────────────────────────
+    # Infer 
 
     def infer(
         self,
@@ -401,32 +400,6 @@ class ShardBridge:
     ) -> tuple[str, InferenceMetrics]:
         """
         Run inference on the loaded model.
-
-        Metric definitions
-        ──────────────────
-        time_to_first_tok_s
-            Wall-clock from the start of the llama.cpp call until the first
-            token chunk is yielded.  Captures prompt-eval (prefill) latency.
-
-        tokens_per_sec
-            Decode throughput: (n_tokens - 1) / decode_elapsed
-            where decode_elapsed = total_elapsed - time_to_first_tok_s.
-            The first token is excluded because it is produced during prefill,
-            not decode.  Falls back to n_tokens / total_elapsed when only one
-            token is generated.
-
-        cpu_percent
-            Sampled via psutil immediately after the stream is exhausted.
-            psutil.cpu_percent(interval=None) returns usage since the *last*
-            call, so we prime it just before inference begins and read it once
-            inference is complete — giving a measurement window that tightly
-            covers the decode phase.
-
-        ram_delta_mb
-            Model-load delta (set once in load(), stable across calls).
-
-        ram_used_mb
-            System-wide RAM in use at the end of inference.
         """
         if self._llm is None:
             raise RuntimeError("Model is not loaded. Call load() first.")
@@ -472,9 +445,8 @@ class ShardBridge:
         full_output    = "".join(tokens)
         total_elapsed  = t_end - t_start
 
-        # ── tokens_per_sec ────────────────────────────────────────────────────
+        #  tokens_per_sec
         # Decode throughput: exclude the first token (prefill) from the
-        # token count *and* from the elapsed time so we measure decode speed.
         if token_count > 1 and t_second_token > 0.0:
             decode_tokens  = token_count - 1
             decode_elapsed = t_end - t_second_token
@@ -503,7 +475,7 @@ class ShardBridge:
 
         return full_output, metrics
 
-    # ── Cleanup ───────────────────────────────────────────────────────────────
+    # Cleanup  
 
     def cleanup(self) -> None:
         """Unlink the tmpfs model file and release llama.cpp resources."""
@@ -519,7 +491,7 @@ class ShardBridge:
         self.cleanup()
 
 
-# ── util ─────────────────────────────────────────────────────────────────────
+# util
 
 def _emit(cb: Optional[Callable[[str], None]], msg: str) -> None:
     if cb:

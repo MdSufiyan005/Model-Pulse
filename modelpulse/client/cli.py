@@ -1,6 +1,5 @@
 """
-modelpulse.client.cli
-Device B CLI — Claude Code-inspired clean TUI.
+Device B (Client) CLI — clean TUI.
 """
 
 from __future__ import annotations
@@ -29,10 +28,10 @@ from modelpulse.client.benchmarks import (
 from modelpulse.shared.models import InferenceMetrics, ShardManifest
 from modelpulse.shared.ws_protocol import MsgType, WsMessage
 
-# ── Sentinel for disconnect ───────────────────────────────────────────────────
+#  Sentinel for disconnect
 _DISCONNECT = object()
 
-# ── Theme ─────────────────────────────────────────────────────────────────────
+#  Theme
 _THEME = Theme(
     {
         "ok":   "green",
@@ -51,7 +50,7 @@ error_console = Console(theme=_THEME, highlight=False, stderr=True)
 
 app = typer.Typer(name="bridge", add_completion=False)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# Helpers
 
 def _ok(msg: str)   -> None: console.print(f"[ok]✓[/ok] {msg}")
 def _step(msg: str) -> None: console.print(f"[step]> {msg}[/step]")
@@ -109,7 +108,7 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
     truncation count, and a clean tok/s figure that excludes truncated
     questions so operators can see uncontaminated decode throughput.
     """
-    # ── Warnings ──────────────────────────────────────────────────────────────
+    #  Warnings
     if results.thermal_throttle_warning and results.cpu_temp_c is not None:
         _warn(
             f"CPU at {results.cpu_temp_c:.0f}°C — thermal throttling likely. "
@@ -124,7 +123,7 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
         )
         console.print()
 
-    # ── Aggregate summary ─────────────────────────────────────────────────────
+    # ── Aggregate summary  
     table = Table(show_header=False, box=box.SIMPLE)
 
     table.add_row(
@@ -170,7 +169,7 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
 
     console.print(table)
 
-    # ── Per-question breakdown ────────────────────────────────────────────────
+    #   Per-question breakdown 
     if results.question_results:
         console.print()
         console.print("  [hdr]per-question breakdown[/hdr]")
@@ -289,7 +288,7 @@ async def _send_metrics(
         _warn(f"could not send metrics: {exc}")
 
 
-# ── CLI Command ───────────────────────────────────────────────────────────────
+#   CLI Command   
 
 @app.command()
 def run(
@@ -320,7 +319,7 @@ def run(
     )
 
 
-# ── Core Logic ────────────────────────────────────────────────────────────────
+# Core Logic 
 
 def _header() -> None:
     console.print()
@@ -440,7 +439,7 @@ async def _run_ws_async(
 
                     _rule()
 
-                    # ── Benchmark ─────────────────────────────────────────────
+                    # Benchmark
                     if benchmark:
                         console.print()
                         budget_note = (
@@ -504,7 +503,7 @@ async def _run_ws_async(
                         console.print()
                         continue
 
-                    # ── Single prompt ─────────────────────────────────────────
+                    #  Single prompt
                     elif prompt is not None:
                         effective_tokens = max_tokens if max_tokens is not None else 256
                         console.print()
@@ -586,7 +585,7 @@ async def _run_ws_async(
     console.print()
 
 
-# ── Shard Pull ────────────────────────────────────────────────────────────────
+#  Shard Pull 
 
 async def _pull_shards(
     client: ShardClient,

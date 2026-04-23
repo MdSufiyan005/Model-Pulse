@@ -1,6 +1,4 @@
 """
-modelpulse.server_api
-─────────────────────
 Control plane : WebSocket /ws  (signals only — no binary blobs)
 Data plane    : HTTP  /manifest, /shards/*, /models/upload
 """
@@ -30,7 +28,7 @@ log = logging.getLogger("modelpulse.server")
 PING_INTERVAL = 20.0
 
 
-# ── ConnectionManager ─────────────────────────────────────────────────────────
+# ConnectionManager
 
 class ConnectionManager:
     def __init__(self) -> None:
@@ -81,7 +79,7 @@ class ConnectionManager:
         return list(self._connections.values())
 
 
-# ── App factory ───────────────────────────────────────────────────────────────
+#   App
 
 def create_app(
     shard_dir: Path,
@@ -94,7 +92,7 @@ def create_app(
     # active model state — mutable box so closures can write it
     _state: dict[str, str] = {"model_id": ""}
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # helpers  
 
     def _model_dir(model_id: str) -> Path:
         return shard_dir / model_id
@@ -117,7 +115,7 @@ def create_app(
         with open(metrics_log, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload) + "\n")
 
-    # ── lifespan (manager lives inside the running event loop) ────────────────
+    #   lifespan (manager lives inside the running event loop)
 
     manager: ConnectionManager | None = None
 
@@ -139,12 +137,12 @@ def create_app(
         finally:
             task.cancel()
 
-    app = FastAPI(title="modelpulse / Device A", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="modelpulse / Device A", version="0.2.0", lifespan=lifespan)
 
     def _mgr() -> ConnectionManager:
         return app.state.manager
 
-    # ── HTTP — health / manifest / shards ─────────────────────────────────────
+    #  HTTP — health / manifest / shards    
 
     @app.get("/health")
     def health():
@@ -173,7 +171,7 @@ def create_app(
             raise HTTPException(404, f"Not found: {filename}")
         return FileResponse(str(p), media_type="application/octet-stream", filename=filename)
 
-    # ── HTTP — metrics ────────────────────────────────────────────────────────
+    #  HTTP — metrics  
 
     @app.post("/metrics")
     async def post_metrics(request: Request):
@@ -199,7 +197,7 @@ def create_app(
             raise HTTPException(404, "No metrics yet")
         return json.loads(lines[-1])
 
-    # ── HTTP — model upload ───────────────────────────────────────────────────
+    #   HTTP — model upload  
 
     @app.post("/models/upload")
     async def upload_model(
@@ -223,7 +221,7 @@ def create_app(
           • model_ready broadcast to all connected WS clients
             (carries model_id only — clients fetch /manifest + /shards via HTTP)
         """
-        # ── validate inputs ───────────────────────────────────────────────────
+        #   validate inputs  
         if not model_id or any(c in model_id for c in (".", "/", "\\", "..")):
             raise HTTPException(400, f"Invalid model_id: {model_id!r}")
 
@@ -242,7 +240,7 @@ def create_app(
         if bad:
             raise HTTPException(400, f"Non-.shard file(s): {bad}")
 
-        # ── write to disk ─────────────────────────────────────────────────────
+        #   write to disk  
         dest = _model_dir(model_id)
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -262,7 +260,7 @@ def create_app(
             log.exception("write error for model=%s: %s", model_id, exc)
             raise HTTPException(500, f"Write error: {exc}") from exc
 
-        # ── validate manifest ─────────────────────────────────────────────────
+        #   validate manifest  
         manifest_path = dest / "manifest.json"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -274,12 +272,12 @@ def create_app(
             manifest["model_id"] = model_id
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-        # ── switch active model ───────────────────────────────────────────────
+        #   switch active model  
         previous = _state["model_id"]
         _state["model_id"] = model_id
         log.info("active model  %s → %s", previous or "(none)", model_id)
 
-        # ── broadcast to WS clients (signal only, no binary payload) ─────────
+        #   broadcast to WS clients (signal only, no binary payload)  
         msg = WsMessage.model_ready({}, model_id=model_id)
         reached = await _mgr().broadcast(msg)
         log.info("model_ready broadcast  model=%s  clients=%d", model_id, reached)
@@ -292,7 +290,7 @@ def create_app(
             "dest_dir": str(dest),
         }
 
-    # ── HTTP — admin ──────────────────────────────────────────────────────────
+    #   HTTP — admin  
 
     @app.post("/models/notify")
     async def notify_clients():
@@ -323,7 +321,7 @@ def create_app(
     def ws_clients():
         return {"count": _mgr().count, "client_ids": _mgr().client_ids()}
 
-    # ── WebSocket ─────────────────────────────────────────────────────────────
+    #   WebSocket    
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
@@ -395,11 +393,18 @@ def create_app(
     return app
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+#   CLI  
 
 @cli.command()
 def run(
-    shard_dir: Path = typer.Argument(..., exists=True, file_okay=False, dir_okay=True),
+    shard_dir: Path = typer.Option(
+        Path("models-storage"),
+        "--shard-dir",
+        "-d",
+        help="Directory to store model shards. Created if it doesn't exist.",
+        file_okay=False,
+        dir_okay=True,
+    ),
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(8000),
     metrics_log: Path = typer.Option(Path("metrics.jsonl")),
@@ -411,6 +416,7 @@ def run(
         format="%(asctime)s  %(name)s  %(levelname)s  %(message)s",
     )
     shard_dir = shard_dir.resolve()
+    shard_dir.mkdir(parents=True, exist_ok=True)
     app = create_app(shard_dir, metrics_log, port=port, ping_interval=ping_interval)
     uvicorn.run(app, host=host, port=port, reload=reload, log_level="info")
 

@@ -1,6 +1,4 @@
 """
-modelpulse.shared.ws_protocol
-──────────────────────────────
 Shared WebSocket message envelope and typed factories used by both
 Device A (server) and Device B (client).
 
@@ -28,7 +26,7 @@ from enum import Enum
 from typing import Any
 
 
-# ── Message types ─────────────────────────────────────────────────────────────
+# Message types  
 
 class MsgType(str, Enum):
     # S→C
@@ -46,7 +44,7 @@ class MsgType(str, Enum):
     BYE           = "bye"           # graceful close announcement
 
 
-# ── Envelope ──────────────────────────────────────────────────────────────────
+#   Envelope 
 
 @dataclass
 class WsMessage:
@@ -57,7 +55,7 @@ class WsMessage:
     msg_id:  str   = field(default_factory=lambda: uuid.uuid4().hex[:8])
     ts:      float = field(default_factory=time.time)
 
-    # ── serialisation ─────────────────────────────────────────────────────────
+    #   serialisation  
 
     def to_json(self) -> str:
         return json.dumps(
@@ -80,7 +78,7 @@ class WsMessage:
             ts      = d.get("ts", time.time()),
         )
 
-    # ── S→C factories ─────────────────────────────────────────────────────────
+    #   S→C factories  
 
     @classmethod
     def model_ready(cls, manifest: dict, *, model_id: str = "") -> "WsMessage":
@@ -98,7 +96,7 @@ class WsMessage:
     def error(cls, detail: str, *, ref_msg_id: str = "") -> "WsMessage":
         return cls(type=MsgType.ERROR, payload={"detail": detail, "ref": ref_msg_id})
 
-    # ── C→S factories ─────────────────────────────────────────────────────────
+    #   C→S factories  
 
     @classmethod
     def hello(cls, client_id: str, *, capabilities: dict | None = None) -> "WsMessage":
@@ -117,7 +115,7 @@ class WsMessage:
     def pong(cls, ping_ts: float) -> "WsMessage":
         return cls(type=MsgType.PONG, payload={"ping_ts": ping_ts, "ts": time.time()})
 
-    # ── bidirectional factories ────────────────────────────────────────────────
+    #   bidirectional factories  
 
     @classmethod
     def ack(cls, ref_msg_id: str) -> "WsMessage":
@@ -127,7 +125,7 @@ class WsMessage:
     def bye(cls, reason: str = "") -> "WsMessage":
         return cls(type=MsgType.BYE, payload={"reason": reason})
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    #   helpers  
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"WsMessage(type={self.type!r}, msg_id={self.msg_id!r})"

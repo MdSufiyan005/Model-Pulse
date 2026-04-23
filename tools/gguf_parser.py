@@ -1,7 +1,5 @@
 """
-gguf_parser.py
-Low-level GGUF binary reader. Stdlib only.
-
+Low-level GGUF binary reader. 
 Supports GGUF versions 1, 2, 3.
 Reference: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 """
@@ -12,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-# ── GGML type registry ──────────────────────────────────────────────────────
+# GGML type registry 
 # (type_id, block_size, block_bytes)
 # nbytes(tensor) = (n_elements / block_size) * block_bytes
 _GGML_TYPES: dict[int, tuple[str, int, int]] = {
@@ -133,7 +131,7 @@ class GGUFReader:
     def __exit__(self, *_):
         self.close()
 
-    # ── primitive readers ──
+    # primitive readers 
     def _read(self, fmt: str) -> tuple:
         size = struct.calcsize(fmt)
         data = self._f.read(size)

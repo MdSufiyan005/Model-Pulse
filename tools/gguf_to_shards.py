@@ -1,5 +1,4 @@
 """
-gguf_to_shards.py
 Converts a monolithic GGUF file into a dynamic shard store.
 
 Output layout:

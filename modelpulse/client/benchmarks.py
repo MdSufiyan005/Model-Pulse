@@ -1,34 +1,5 @@
 """
-modelpulse.client.benchmarks
-Edge-aware, non-blocking benchmark suite for inference testing and metric aggregation.
-
-Metric correctness notes
-────────────────────────
-avg_tokens_per_sec
-    total_tokens / total_pure_inference_time  (harmonic-mean-equivalent).
-    Does NOT use mean(per_question_tps).
-
-latency_values
-    Wall-clock time measured by asyncio around each infer() call.
-    Includes TTFT + decode.  Warmup is excluded.
-
-ttft_values
-    From InferenceMetrics.time_to_first_tok_s (measured inside ShardBridge).
-
-truncated
-    A question is flagged as truncated when tokens_generated >= max_tokens - 1.
-    Truncated questions produce artificially high latency and low apparent
-    throughput variance — they should be excluded from aggregate throughput
-    or re-run with a higher budget.
-
-warmup_time_s
-    Wall-clock of the warmup call, stored on BenchmarkResults so callers can
-    subtract it from total_time_s if desired.  aggregate_metrics() already
-    excludes it from inference_time_s.
-
-thermal_throttle_warning
-    Set when cpu_temp_c >= THROTTLE_WARN_C.  On most Intel mobile SoCs
-    thermal throttling begins at ~80–85 °C and severely depresses tok/s.
+Edge-aware, benchmark suite for inference testing and metric aggregation.
 """
 
 from __future__ import annotations
@@ -41,7 +12,7 @@ from typing import Callable, Optional
 
 from modelpulse.shared.models import InferenceMetrics
 
-# ── Benchmark profiles ───────────────────────────────────────────────────────
+#  Benchmark profiles  
 
 BENCHMARK_PROFILES: dict[str, int] = {
     "light":  64,
@@ -49,7 +20,7 @@ BENCHMARK_PROFILES: dict[str, int] = {
     "heavy":  256,
 }
 
-# ── Per-question token budgets ────────────────────────────────────────────────
+# ── Per-question token budgets 
 # Keyed by exact question text.  When a question is not found here the
 # suite falls back to the profile default.  Budgets are chosen to be large
 # enough for a complete answer but small enough to avoid padding the latency
@@ -64,14 +35,14 @@ QUESTION_MAX_TOKENS: dict[str, int] = {
     "What is a hash function?":                  96,   # short definition
 }
 
-# ── Questions ────────────────────────────────────────────────────────────────
+# Questions 
 
 BENCHMARK_QUESTIONS = list(QUESTION_MAX_TOKENS.keys())
 
-# ── Thermal throttle threshold ────────────────────────────────────────────────
+#  Thermal throttle threshold 
 THROTTLE_WARN_C: float = 80.0
 
-# ── Results ──────────────────────────────────────────────────────────────────
+#   Results  
 
 @dataclass
 class QuestionResult:
@@ -160,7 +131,7 @@ class BenchmarkResults:
         )
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+#  Helpers  
 
 def _percentile(data: list[float], p: int) -> float:
     if not data:
@@ -188,7 +159,7 @@ def _is_truncated(tokens_generated: int, max_tokens: int) -> bool:
     return tokens_generated >= max(1, max_tokens - 1)
 
 
-# ── Aggregate ────────────────────────────────────────────────────────────────
+#  Aggregate
 
 def aggregate_metrics(
     metrics_list: list[InferenceMetrics],
@@ -243,7 +214,7 @@ def aggregate_metrics(
     result.ram_used_mb             = metrics_list[-1].ram_used_mb
     result.truncated_count         = sum(1 for qr in question_results if qr.truncated)
 
-    # ── Latency ───────────────────────────────────────────────────────────────
+    # ── Latency  ──────────
     if latency_values and len(latency_values) == len(metrics_list):
         lat = latency_values
     else:
@@ -281,14 +252,14 @@ def aggregate_metrics(
     result.median_latency_s = statistics.median(lat) if lat else 0.0
     result.p95_latency_s    = _percentile(lat, 95)
 
-    # ── TTFT ──────────────────────────────────────────────────────────────────
+    # ── TTFT  ─────────────
     if ttft_values:
         result.ttft_values = ttft_values
         result.avg_ttft_s  = statistics.mean(ttft_values)
         result.min_ttft_s  = min(ttft_values)
         result.max_ttft_s  = max(ttft_values)
 
-    # ── CPU ───────────────────────────────────────────────────────────────────
+    # ── CPU  ──────────────
     if cpu_percents:
         result.avg_cpu_percent = statistics.mean(cpu_percents)
 
@@ -302,7 +273,7 @@ def aggregate_metrics(
     return result
 
 
-# ── Benchmark Execution ───────────────────────────────────────────────────────
+# ── Benchmark Execution  ──
 
 async def run_benchmark(
     bridge,
@@ -417,7 +388,7 @@ async def run_benchmark(
 
     total_time = time.perf_counter() - t_suite_start
 
-    # ── Aggregate ─────────────────────────────────────────────────────────────
+    # ── Aggregate  ────────
     if metrics_list:
         results = aggregate_metrics(
             metrics_list, question_results, load_time_s, latency_values

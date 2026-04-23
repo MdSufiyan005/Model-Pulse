@@ -18,29 +18,6 @@ ShardWebSocketSession
     • Handles  ping/pong   keepalive
     • Auto-reconnects with exponential back-off on any disconnect
 
-Typical usage
-─────────────
-    async def run_inference(manifest: ShardManifest) -> InferenceMetrics:
-        async with ShardClient(SERVER_URL) as http:
-            for shard in manifest.shards:
-                data = await http.fetch_shard(shard.filename, shard.sha256)
-                # ... load into your runtime ...
-        return InferenceMetrics(...)
-
-    session = ShardWebSocketSession(
-        base_url       = "http://100.64.0.1:8000",
-        client_id      = "device-b",
-        on_model_ready = run_inference,
-    )
-    await session.run()   # blocks; reconnects forever until session.stop() called
-
-Metric correctness note
-───────────────────────
-In _handle_model_ready the wall-clock time (elapsed_ms) covers the entire
-on_model_ready() coroutine — shard fetching + assembly + model load + inference.
-This is intentionally broad and is only logged, never surfaced in InferenceMetrics
-(which carries its own fine-grained timings from ShardBridge).  Do not use
-elapsed_ms as a proxy for inference latency.
 """
 from __future__ import annotations
 
@@ -61,7 +38,7 @@ from modelpulse.shared.ws_protocol import MsgType, WsMessage
 
 log = logging.getLogger("modelpulse.client")
 
-# ── ShardClient (HTTP) ────────────────────────────────────────────────────────
+# ── ShardClient (HTTP)  ───
 
 class ShardClient:
     """
@@ -97,7 +74,7 @@ class ShardClient:
     async def __aexit__(self, *_) -> None:
         await self.aclose()
 
-    # ── API calls ─────────────────────────────────────────────────────────────
+    # API calls 
 
     async def ping(self) -> float:
         """GET /health — returns round-trip time in ms."""
@@ -176,7 +153,7 @@ class ShardClient:
         return resp.json()
 
 
-# ── ShardWebSocketSession (control-plane) ─────────────────────────────────────
+#  ShardWebSocketSession (control-plane)
 
 _BACKOFF_BASE   = 2.0    # seconds
 _BACKOFF_MAX    = 60.0   # seconds
@@ -232,7 +209,7 @@ class ShardWebSocketSession:
         self._ws       = None   # current websockets connection
         self._model_id = ""     # last model_id received from server
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # ── public API  ───────
 
     async def run(self) -> None:
         """
@@ -275,7 +252,7 @@ class ShardWebSocketSession:
             except Exception:
                 pass
 
-    # ── internals ─────────────────────────────────────────────────────────────
+    # internals 
 
     async def _connect_and_loop(self) -> None:
         log.info("Connecting to %s  client_id=%s", self.ws_url, self.client_id)
@@ -340,7 +317,7 @@ class ShardWebSocketSession:
 
         log.info("model_ready  model_id=%s  fetching manifest over HTTP…", model_id)
 
-        # ── Fetch manifest via HTTP (not from the WS payload) ─────────────────
+        #  Fetch manifest via HTTP (not from the WS payload)
         try:
             async with ShardClient(self.base_url, timeout=30.0) as http:
                 manifest = await http.fetch_manifest()
@@ -353,7 +330,7 @@ class ShardWebSocketSession:
             )
             return
 
-        # ── Call the user-supplied inference coroutine ─────────────────────────
+        # Call the user-supplied inference coroutine
         # elapsed_ms covers shard download + assembly + load + inference.
         # It is a coarse operational diagnostic, NOT an inference latency figure.
         # Fine-grained timings (TTFT, tok/s, load_time_s) live inside the
@@ -382,7 +359,7 @@ class ShardWebSocketSession:
         )
         self._model_id = model_id
 
-        # ── Send metrics back to Device A ─────────────────────────────────────
+        # Send metrics back to Device A
         try:
             metrics_msg = WsMessage.metrics(metrics.to_dict(), model_id=model_id)
             await ws.send(metrics_msg.to_json())

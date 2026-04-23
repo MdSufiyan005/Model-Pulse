@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-# ── Manifest ────────────────────────────────────────────────────────────────
+#  Manifest  
 
 @dataclass
 class ShardManifest:
@@ -36,7 +36,7 @@ class ShardManifest:
         )
 
 
-# ── Metrics ─────────────────────────────────────────────────────────────────
+# Metrics 
 
 @dataclass
 class InferenceMetrics:
