@@ -24,7 +24,7 @@ import struct
 import time
 from pathlib import Path
 
-from tools.gguf_parser import GGUFReader, GGUFTensorInfo
+from gguf_parser import GGUFReader, GGUFTensorInfo
 
 SHARD_MAGIC = b"SHRD"
 SHARD_VERSION = 1

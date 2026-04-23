@@ -9,3 +9,9 @@ notes.txt
 test/
 modelpulse.egg-info
 notes.txt
+API_TESTING.md
+SHARD_UPLOAD_SERVICE.md
+upload_model.sh
+model
+TEST_WORKFLOW.md
+tools/qwen_shards
