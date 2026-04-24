@@ -20,7 +20,7 @@ BENCHMARK_PROFILES: dict[str, int] = {
     "heavy":  256,
 }
 
-# ── Per-question token budgets 
+# Per-question token budgets
 # Keyed by exact question text.  When a question is not found here the
 # suite falls back to the profile default.  Budgets are chosen to be large
 # enough for a complete answer but small enough to avoid padding the latency
@@ -171,7 +171,6 @@ def aggregate_metrics(
     Build BenchmarkResults from per-question InferenceMetrics + QuestionResults.
 
     Parameters
-    ----------
     metrics_list      Per-question InferenceMetrics from ShardBridge.infer().
     question_results  Per-question QuestionResult (truncation flags etc.).
     load_time_s       From ShardBridge._load_time_s.
@@ -214,7 +213,7 @@ def aggregate_metrics(
     result.ram_used_mb             = metrics_list[-1].ram_used_mb
     result.truncated_count         = sum(1 for qr in question_results if qr.truncated)
 
-    # ── Latency  ──────────
+    # Latency
     if latency_values and len(latency_values) == len(metrics_list):
         lat = latency_values
     else:
@@ -229,12 +228,12 @@ def aggregate_metrics(
     total_inference_time    = sum(lat)
     result.inference_time_s = total_inference_time
 
-    # ── Aggregate throughput (all questions) ──────────────────────────────────
+    # Aggregate throughput (all questions)
     result.avg_tokens_per_sec = (
         total_tokens / total_inference_time if total_inference_time > 0 else 0.0
     )
 
-    # ── Clean throughput (non-truncated only) ─────────────────────────────────
+    # Clean throughput (non-truncated only)
     clean_pairs = [
         (metrics_list[i].tokens_generated, lat[i])
         for i, qr in enumerate(question_results)
@@ -252,18 +251,18 @@ def aggregate_metrics(
     result.median_latency_s = statistics.median(lat) if lat else 0.0
     result.p95_latency_s    = _percentile(lat, 95)
 
-    # ── TTFT  ─────────────
+    # TTFT
     if ttft_values:
         result.ttft_values = ttft_values
         result.avg_ttft_s  = statistics.mean(ttft_values)
         result.min_ttft_s  = min(ttft_values)
         result.max_ttft_s  = max(ttft_values)
 
-    # ── CPU  ──────────────
+    # CPU
     if cpu_percents:
         result.avg_cpu_percent = statistics.mean(cpu_percents)
 
-    # ── Thermal throttle warning ──────────────────────────────────────────────
+    # Thermal throttle warning
     if result.cpu_temp_c is not None and result.cpu_temp_c >= THROTTLE_WARN_C:
         result.thermal_throttle_warning = True
 
@@ -273,7 +272,7 @@ def aggregate_metrics(
     return result
 
 
-# ── Benchmark Execution  ──
+# Benchmark Execution
 
 async def run_benchmark(
     bridge,
@@ -289,7 +288,6 @@ async def run_benchmark(
     Run the benchmark suite off the event loop.
 
     Per-question token budgets
-    ──────────────────────────
     When max_tokens is None (the default), each question uses its entry from
     QUESTION_MAX_TOKENS if available, falling back to the profile default.
     This prevents short-answer questions (arithmetic, capitals) from being
@@ -299,7 +297,6 @@ async def run_benchmark(
     Passing an explicit max_tokens overrides all per-question budgets.
 
     Truncation detection
-    ────────────────────
     After each question, tokens_generated is compared to the budget used.
     Truncated questions are flagged in QuestionResult.truncated and counted
     in BenchmarkResults.truncated_count.  avg_tokens_per_sec_clean excludes
@@ -315,7 +312,7 @@ async def run_benchmark(
 
     load_time_s = getattr(bridge, "_load_time_s", 0.0)
 
-    # ── Warmup (excluded from stats, but timed) ───────────────────────────────
+    # Warmup (excluded from stats, but timed)
     t_warmup = time.perf_counter()
     try:
         await asyncio.to_thread(
@@ -327,7 +324,7 @@ async def run_benchmark(
 
     t_suite_start = time.perf_counter()
 
-    # ── Per-question inference ────────────────────────────────────────────────
+    # Per-question inference
     for i, question in enumerate(questions):
         if on_progress:
             on_progress(i + 1, len(questions), question)
@@ -388,7 +385,7 @@ async def run_benchmark(
 
     total_time = time.perf_counter() - t_suite_start
 
-    # ── Aggregate  ────────
+    # Aggregate
     if metrics_list:
         results = aggregate_metrics(
             metrics_list, question_results, load_time_s, latency_values
@@ -402,7 +399,7 @@ async def run_benchmark(
     results.fail_count     = fail_count
     results.question_count = len(questions)
 
-    # ── Perplexity (single pass after all inference) ───────────────────────────
+    # Perplexity (single pass after all inference)
     if getattr(bridge, "compute_perplexity", False):
         perplexity_text = "\n".join(questions)
         try:

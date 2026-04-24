@@ -1,13 +1,16 @@
 """
 Control plane : WebSocket /ws  (signals only — no binary blobs)
-Data plane    : HTTP  /manifest, /shards/*, /models/upload
+Data plane    : HTTP  /manifest, /shards/*, /models/upload,
+                      /models/delta, /shards/delta/<model_id>/*
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import shutil
+import struct
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +29,32 @@ _console = Console(highlight=False)
 log = logging.getLogger("modelpulse.server")
 
 PING_INTERVAL = 20.0
+
+# Delta manifest filename
+DELTA_MANIFEST_FILE = "delta_manifest.json"
+
+
+# SHA-256 helpers
+
+def _sha256_of_upload(upload: UploadFile, data: bytes) -> str:
+    """Return hex SHA-256 of raw shard payload (strip SHRD header if present)."""
+    if len(data) >= 12 and data[:4] == b"SHRD":
+        hdr_len = struct.unpack("<I", data[8:12])[0]
+        payload = data[12 + hdr_len:]
+    else:
+        payload = data
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Return hex SHA-256 of the tensor payload stored in a .shard file."""
+    data = path.read_bytes()
+    if len(data) >= 12 and data[:4] == b"SHRD":
+        hdr_len = struct.unpack("<I", data[8:12])[0]
+        payload = data[12 + hdr_len:]
+    else:
+        payload = data
+    return hashlib.sha256(payload).hexdigest()
 
 
 # ConnectionManager
@@ -79,7 +108,7 @@ class ConnectionManager:
         return list(self._connections.values())
 
 
-#   App
+# App
 
 def create_app(
     shard_dir: Path,
@@ -90,9 +119,14 @@ def create_app(
 ) -> FastAPI:
 
     # active model state — mutable box so closures can write it
-    _state: dict[str, str] = {"model_id": ""}
+    _state: dict[str, Any] = {
+        "model_id": "",
+        # iteration counter: how many delta uploads have been applied to the
+        # current active model lineage.  Reset to 0 on a full upload.
+        "iteration": 0,
+    }
 
-    # helpers  
+    # helpers
 
     def _model_dir(model_id: str) -> Path:
         return shard_dir / model_id
@@ -111,11 +145,18 @@ def create_app(
             return None
         return json.loads(p.read_text(encoding="utf-8"))
 
+    def _load_delta_manifest(model_id: str) -> dict | None:
+        """Load delta_manifest.json for the given model_id, if it exists."""
+        p = _model_dir(model_id) / DELTA_MANIFEST_FILE
+        if not p.exists():
+            return None
+        return json.loads(p.read_text(encoding="utf-8"))
+
     def _log_metrics(payload: dict) -> None:
         with open(metrics_log, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload) + "\n")
 
-    #   lifespan (manager lives inside the running event loop)
+    # lifespan
 
     manager: ConnectionManager | None = None
 
@@ -137,18 +178,19 @@ def create_app(
         finally:
             task.cancel()
 
-    app = FastAPI(title="modelpulse / Device A", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="modelpulse / Device A", version="0.3.0", lifespan=lifespan)
 
     def _mgr() -> ConnectionManager:
         return app.state.manager
 
-    #  HTTP — health / manifest / shards    
+    # HTTP — health / manifest / shards
 
     @app.get("/health")
     def health():
         return {
             "status": "ok",
             "active_model_id": _state["model_id"],
+            "active_iteration": _state["iteration"],
             "shard_dir": str(shard_dir),
             "ws_clients": _mgr().count,
         }
@@ -171,7 +213,62 @@ def create_app(
             raise HTTPException(404, f"Not found: {filename}")
         return FileResponse(str(p), media_type="application/octet-stream", filename=filename)
 
-    #  HTTP — metrics  
+    # HTTP — delta manifest + delta shards
+
+    @app.get("/shards/delta/{model_id}/manifest")
+    def get_delta_manifest(model_id: str):
+        """
+        Return the delta_manifest.json for *model_id*.
+
+        The delta manifest lists only the shards that changed relative to the
+        base model.  Clients fetch this first, then fetch only those shards
+        from  GET /shards/delta/{model_id}/{filename}.
+        """
+        dm = _load_delta_manifest(model_id)
+        if dm is None:
+            raise HTTPException(
+                404,
+                f"No delta manifest for model_id={model_id!r}. "
+                "This model was uploaded as a full model, not a delta.",
+            )
+        return JSONResponse(content=dm)
+
+    @app.get("/shards/delta/{model_id}/{filename}")
+    def get_delta_shard(model_id: str, filename: str):
+        """
+        Serve a single changed shard file that belongs to a delta update.
+
+        Delta shard files live in  {shard_dir}/{model_id}/  alongside the
+        full-model shards that were *not* changed.  The client is responsible
+        for merging them into its cached shard dict.
+        """
+        if "/" in filename or ".." in filename or "\\" in filename:
+            raise HTTPException(400, "Invalid filename")
+        if not filename.endswith(".shard"):
+            raise HTTPException(400, "Only .shard files are served")
+
+        dm = _load_delta_manifest(model_id)
+        if dm is None:
+            raise HTTPException(404, f"No delta manifest for model_id={model_id!r}")
+
+        changed = dm.get("changed_shards", {})
+        # Check if the requested filename is either a key in changed_shards
+        # or the 'file' field of one of the entries.
+        is_changed = (filename in changed) or any(s.get("file") == filename for s in changed.values())
+
+        if not is_changed:
+            raise HTTPException(
+                404,
+                f"{filename!r} is not listed as a changed shard for {model_id!r}",
+            )
+
+        p = _model_dir(model_id) / filename
+        if not p.exists():
+            raise HTTPException(404, f"Shard file missing on server: {filename}")
+
+        return FileResponse(str(p), media_type="application/octet-stream", filename=filename)
+
+    # HTTP — metrics
 
     @app.post("/metrics")
     async def post_metrics(request: Request):
@@ -197,7 +294,7 @@ def create_app(
             raise HTTPException(404, "No metrics yet")
         return json.loads(lines[-1])
 
-    #   HTTP — model upload  
+    # HTTP — full model upload
 
     @app.post("/models/upload")
     async def upload_model(
@@ -209,19 +306,17 @@ def create_app(
         Upload a complete model (manifest.json + *.shard files).
 
         multipart/form-data
-        ───────────────────
           model_id   str          unique slug, e.g. "qwen2.5-0.5b-q4"
           manifest   file         must be named manifest.json
           shards     file[]       one or more .shard files
 
         On success
-        ──────────
           • Files written to  {shard_dir}/{model_id}/
           • Active model pointer switched atomically
-          • model_ready broadcast to all connected WS clients
-            (carries model_id only — clients fetch /manifest + /shards via HTTP)
+          • Iteration counter reset to 0
+          • model_ready broadcast (update_type="full") to all WS clients
         """
-        #   validate inputs  
+        # validate inputs
         if not model_id or any(c in model_id for c in (".", "/", "\\", "..")):
             raise HTTPException(400, f"Invalid model_id: {model_id!r}")
 
@@ -240,7 +335,7 @@ def create_app(
         if bad:
             raise HTTPException(400, f"Non-.shard file(s): {bad}")
 
-        #   write to disk  
+        # write to disk
         dest = _model_dir(model_id)
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -260,37 +355,249 @@ def create_app(
             log.exception("write error for model=%s: %s", model_id, exc)
             raise HTTPException(500, f"Write error: {exc}") from exc
 
-        #   validate manifest  
+        # validate manifest
         manifest_path = dest / "manifest.json"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise HTTPException(422, f"manifest.json is not valid JSON: {exc}") from exc
 
-        # embed model_id so GET /manifest is self-describing
         if not manifest.get("model_id"):
             manifest["model_id"] = model_id
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-        #   switch active model  
+        # switch active model
         previous = _state["model_id"]
         _state["model_id"] = model_id
-        log.info("active model  %s → %s", previous or "(none)", model_id)
+        _state["iteration"] = 0          # full upload → reset iteration counter
+        log.info("active model  %s → %s  (full upload, iteration reset to 0)", previous or "(none)", model_id)
 
-        #   broadcast to WS clients (signal only, no binary payload)  
-        msg = WsMessage.model_ready({}, model_id=model_id)
+        # broadcast model_ready (full)
+        msg = WsMessage.model_ready(
+            {},
+            model_id=model_id,
+            update_type="full",
+            base_model_id=None,
+        )
         reached = await _mgr().broadcast(msg)
-        log.info("model_ready broadcast  model=%s  clients=%d", model_id, reached)
+        log.info("model_ready[full] broadcast  model=%s  clients=%d", model_id, reached)
 
         return {
             "status": "uploaded",
+            "update_type": "full",
             "model_id": model_id,
+            "iteration": 0,
             "files_written": written,
             "clients_notified": reached,
             "dest_dir": str(dest),
         }
 
-    #   HTTP — admin  
+    # HTTP — delta upload
+
+    @app.post("/models/delta")
+    async def upload_delta(
+        model_id: Annotated[str, Form()],
+        base_model_id: Annotated[str, Form()],
+        shard_files: Annotated[list[UploadFile], File(alias="shards")],
+    ):
+        """
+        Upload only the changed (quantised) tensor shard blocks on top of an
+        existing full model.
+
+        multipart/form-data
+          model_id       str        slug for *this delta*, e.g. "qwen2.5-0.5b-q4-d1"
+          base_model_id  str        slug of the full model this patches
+          shards         file[]     only the changed .shard files
+
+        Server behaviour
+          1. Validate that base_model_id exists on disk.
+          2. Copy the base model directory to a new directory for model_id
+             (so the delta model is self-contained — unchanged shards come
+             from the copy, changed shards are overwritten).
+          3. Compute SHA-256 of every incoming shard and compare it to the
+             corresponding file in base_model_id to confirm they really differ.
+          4. Write the changed shards into the new model_id directory,
+             overwriting the copied baseline versions.
+          5. Build and persist delta_manifest.json, listing only the changed
+             shards with their new SHA-256 digests and byte counts.
+          6. Switch the active model pointer to model_id.
+          7. Broadcast model_ready (update_type="delta") to WS clients.
+
+        On success clients can:
+          • Call GET /shards/delta/{model_id}/manifest  to learn which shards changed.
+          • Call GET /shards/delta/{model_id}/{filename} for each changed shard.
+          • Patch their in-memory shard cache and reassemble without re-downloading
+            the unchanged shards.
+        """
+        # validate
+        for slug, label in [(model_id, "model_id"), (base_model_id, "base_model_id")]:
+            if not slug or any(c in slug for c in (".", "/", "\\", "..")):
+                raise HTTPException(400, f"Invalid {label}: {slug!r}")
+
+        base_dir = _model_dir(base_model_id)
+        if not base_dir.exists():
+            raise HTTPException(
+                404,
+                f"base_model_id={base_model_id!r} not found on server. "
+                "Upload the full model first.",
+            )
+
+        if not shard_files:
+            raise HTTPException(400, "No shard files provided")
+
+        bad = [u.filename for u in shard_files if not (u.filename or "").endswith(".shard")]
+        if bad:
+            raise HTTPException(400, f"Non-.shard file(s): {bad}")
+
+        for upload in shard_files:
+            name = upload.filename or ""
+            if not name or any(c in name for c in ("/", "\\", "..")):
+                raise HTTPException(400, f"Unsafe filename: {name!r}")
+
+        # copy base → new model dir
+        dest = _model_dir(model_id)
+        if dest.exists():
+            shutil.rmtree(dest)            # clean slate for idempotent re-uploads
+        shutil.copytree(base_dir, dest)
+        log.info("delta  copied base %s → %s", base_model_id, model_id)
+
+        # read, verify, write changed shards
+        # Load manifest to map filenames to tensor names
+        manifest_path = dest / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            file_to_tensor = {s["file"]: name for name, s in manifest.get("shards", {}).items()}
+        except Exception as exc:
+            log.exception("failed to load manifest for delta: %s", exc)
+            file_to_tensor = {}
+
+        changed_shards: dict[str, dict] = {}
+        written: list[str] = []
+
+        try:
+            for upload in shard_files:
+                fname = upload.filename
+                raw   = await upload.read()                 # read entire shard into RAM
+
+                # Compare against the baseline copy we just wrote
+                baseline_path = dest / fname
+                if baseline_path.exists():
+                    old_sha = _sha256_of_file(baseline_path)
+                else:
+                    old_sha = ""
+
+                new_sha = _sha256_of_upload(upload, raw)
+
+                if old_sha == new_sha:
+                    log.warning(
+                        "delta  shard %s is identical to baseline — "
+                        "including anyway (caller said it changed)", fname
+                    )
+
+                # Overwrite the copied baseline with the new version
+                dest_path = dest / fname
+                dest_path.write_bytes(raw)
+                written.append(fname)
+
+                # Record in the delta index
+                # Use the tensor name (from manifest) as the key, falling back to filename
+                tensor_key = file_to_tensor.get(fname, fname)
+                changed_shards[tensor_key] = {
+                    "file":    fname,
+                    "sha256":  new_sha,
+                    "nbytes":  len(raw),
+                    "old_sha": old_sha,
+                }
+
+                # If the shard has a SHRD header, update the manifest with new metadata
+                if len(raw) >= 12 and raw[:4] == b"SHRD":
+                    try:
+                        hdr_len = struct.unpack("<I", raw[8:12])[0]
+                        hdr_json = json.loads(raw[12:12+hdr_len].decode("utf-8"))
+                        if tensor_key in manifest.get("shards", {}):
+                            s_info = manifest["shards"][tensor_key]
+                            s_info["nbytes"]         = hdr_json.get("nbytes", s_info["nbytes"])
+                            s_info["ggml_type"]      = hdr_json.get("ggml_type", s_info["ggml_type"])
+                            s_info["ggml_type_name"] = hdr_json.get("ggml_type_name", s_info.get("ggml_type_name"))
+                            s_info["dims"]           = hdr_json.get("dims", s_info["dims"])
+                            s_info["sha256"]         = hdr_json.get("sha256", s_info["sha256"])
+                    except Exception as exc:
+                        log.warning("failed to parse SHRD header for %s: %s", fname, exc)
+                log.info(
+                    "delta  model=%s  shard=%s  size=%d B  sha=%s…",
+                    model_id, fname, len(raw), new_sha[:12],
+                )
+
+        except Exception as exc:
+            log.exception("delta write error for model=%s: %s", model_id, exc)
+            shutil.rmtree(dest, ignore_errors=True)
+            raise HTTPException(500, f"Write error: {exc}") from exc
+
+        # patch manifest.json
+        # (manifest was already loaded above)
+
+        manifest["model_id"]      = model_id
+        manifest["base_model_id"] = base_model_id
+        manifest["total_bytes"]   = sum(s["nbytes"] for s in manifest.get("shards", {}).values())
+        manifest["tensor_count"]  = len(manifest.get("shards", {}))
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        # determine iteration number
+        # If we are chaining deltas from the same lineage, increment; else start at 1.
+        prev_iteration = _state["iteration"] if _state["model_id"] == base_model_id else 0
+        new_iteration  = prev_iteration + 1
+
+        # write delta_manifest.json
+        delta_manifest = {
+            "base_model_id":  base_model_id,
+            "delta_model_id": model_id,
+            "iteration":      new_iteration,
+            "changed_shards": changed_shards,
+            "timestamp":      time.time(),
+        }
+        (dest / DELTA_MANIFEST_FILE).write_text(
+            json.dumps(delta_manifest, indent=2), encoding="utf-8"
+        )
+        log.info(
+            "delta_manifest written  model=%s  changed=%d  iteration=%d",
+            model_id, len(changed_shards), new_iteration,
+        )
+
+        # switch active model
+        previous = _state["model_id"]
+        _state["model_id"]  = model_id
+        _state["iteration"] = new_iteration
+        log.info(
+            "active model  %s → %s  (delta, iteration=%d)",
+            previous or "(none)", model_id, new_iteration,
+        )
+
+        # broadcast model_ready (delta)
+        msg = WsMessage.model_ready(
+            {},
+            model_id=model_id,
+            update_type="delta",
+            base_model_id=base_model_id,
+        )
+        reached = await _mgr().broadcast(msg)
+        log.info(
+            "model_ready[delta] broadcast  model=%s  base=%s  clients=%d",
+            model_id, base_model_id, reached,
+        )
+
+        return {
+            "status":          "delta_uploaded",
+            "update_type":     "delta",
+            "model_id":        model_id,
+            "base_model_id":   base_model_id,
+            "iteration":       new_iteration,
+            "changed_shards":  list(changed_shards.keys()),
+            "files_written":   written,
+            "clients_notified": reached,
+            "dest_dir":        str(dest),
+        }
+
+    # HTTP — admin
 
     @app.post("/models/notify")
     async def notify_clients():
@@ -298,10 +605,25 @@ def create_app(
         m = _load_manifest()
         if m is None:
             raise HTTPException(404, "No active model")
-        model_id = _state["model_id"] or m.get("model_id", "")
-        msg = WsMessage.model_ready({}, model_id=model_id)
+        model_id      = _state["model_id"] or m.get("model_id", "")
+        dm            = _load_delta_manifest(model_id)
+        update_type   = "delta" if dm is not None else "full"
+        base_model_id = dm.get("base_model_id") if dm else None
+
+        msg = WsMessage.model_ready(
+            {},
+            model_id=model_id,
+            update_type=update_type,
+            base_model_id=base_model_id,
+        )
         reached = await _mgr().broadcast(msg)
-        return {"status": "broadcast", "clients_reached": reached, "model_id": model_id}
+        return {
+            "status":        "broadcast",
+            "update_type":   update_type,
+            "clients_reached": reached,
+            "model_id":      model_id,
+            "base_model_id": base_model_id,
+        }
 
     @app.get("/models")
     def list_models():
@@ -309,11 +631,18 @@ def create_app(
         for d in sorted(shard_dir.iterdir()):
             if not d.is_dir():
                 continue
+            dm = None
+            if (d / DELTA_MANIFEST_FILE).exists():
+                dm = json.loads((d / DELTA_MANIFEST_FILE).read_text(encoding="utf-8"))
             models.append({
-                "model_id": d.name,
-                "active": d.name == _state["model_id"],
-                "shards": [f.name for f in sorted(d.glob("*.shard"))],
-                "has_manifest": (d / "manifest.json").exists(),
+                "model_id":      d.name,
+                "active":        d.name == _state["model_id"],
+                "shards":        [f.name for f in sorted(d.glob("*.shard"))],
+                "has_manifest":  (d / "manifest.json").exists(),
+                "is_delta":      dm is not None,
+                "base_model_id": dm.get("base_model_id") if dm else None,
+                "iteration":     dm.get("iteration") if dm else 0,
+                "changed_shards": list(dm["changed_shards"].keys()) if dm else [],
             })
         return {"active_model_id": _state["model_id"], "models": models}
 
@@ -321,7 +650,7 @@ def create_app(
     def ws_clients():
         return {"count": _mgr().count, "client_ids": _mgr().client_ids()}
 
-    #   WebSocket    
+    # WebSocket
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
@@ -329,8 +658,7 @@ def create_app(
         try:
             await ws.accept()
 
-            # expect hello as the very first message
-            raw = await ws.receive_text()
+            raw   = await ws.receive_text()
             hello = WsMessage.from_json(raw)
             if hello.type != MsgType.HELLO:
                 await ws.send_text(WsMessage.error("Expected hello first").to_json())
@@ -343,18 +671,43 @@ def create_app(
 
             # if a model is already active, tell the client immediately
             if _state["model_id"]:
-                ok = await _mgr().send(ws, WsMessage.model_ready({}, model_id=_state["model_id"]))
+                mid           = _state["model_id"]
+                dm            = _load_delta_manifest(mid)
+                update_type   = "delta" if dm is not None else "full"
+                base_model_id = dm.get("base_model_id") if dm else None
+
+                ok = await _mgr().send(
+                    ws,
+                    WsMessage.model_ready(
+                        {},
+                        model_id=mid,
+                        update_type=update_type,
+                        base_model_id=base_model_id,
+                    ),
+                )
                 if ok:
-                    log.info("model_ready sent on connect  client=%s  model=%s", client_id, _state["model_id"])
+                    log.info(
+                        "model_ready[%s] sent on connect  client=%s  model=%s",
+                        update_type, client_id, mid,
+                    )
             else:
-                # No active model set; auto-detect if manifest exists in shard_dir
                 manifest = _load_manifest()
                 if manifest:
-                    # Found manifest.json in the flat layout or currently active dir
                     model_id = manifest.get("model_id", shard_dir.name)
-                    ok = await _mgr().send(ws, WsMessage.model_ready({}, model_id=model_id))
+                    ok = await _mgr().send(
+                        ws,
+                        WsMessage.model_ready(
+                            {},
+                            model_id=model_id,
+                            update_type="full",
+                            base_model_id=None,
+                        ),
+                    )
                     if ok:
-                        log.info("model_ready sent (auto-detect)  client=%s  model=%s", client_id, model_id)
+                        log.info(
+                            "model_ready[full] sent (auto-detect)  client=%s  model=%s",
+                            client_id, model_id,
+                        )
 
             # message loop
             async for raw_msg in ws.iter_text():
@@ -393,7 +746,7 @@ def create_app(
     return app
 
 
-#   CLI  
+# CLI
 
 @cli.command()
 def run(

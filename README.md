@@ -52,6 +52,7 @@ ModelPulse enables a unique "Zero-Disk" inference strategy: **Device A** (Server
 
 - **🛡️ Zero-Disk Strategy**: Models are assembled in `tmpfs` (`/dev/shm`), ensuring no persistent GGUF footprint on the client's disk.
 - **🔄 Dynamic Model Swapping**: Upload new models to the server at runtime; connected clients automatically unload, pull, and reload the new model without a restart.
+- **⚡ Delta Updates (New!)**: Update only the changed tensors in a model. The bridge patches its in-memory GGUF in real-time, downloading only a fraction of the full model size.
 - **📊 Real-time Telemetry**: Detailed inference metrics (TTFT, tok/s, RAM delta, CPU temp) are streamed back to the server for centralized monitoring.
 - **🛠️ Integrated Benchmarking**: Built-in suite to stress-test edge devices and validate performance across different quantization levels.
 - **🌐 Network Agnostic**: Works seamlessly over local networks, Tailscale, or any HTTP/WS-capable connection.
@@ -103,7 +104,11 @@ modelpulse bridge run http://<server-ip>:8000
 Upload your prepared shards to the server. All connected bridges will instantly receive the update.
 
 ```bash
+# Full Baseline Upload
 ./upload_model.sh "qwen-3.5-2b" "./my-shards/"
+
+# Delta Update (Auto-Diff)
+./upload_model.sh "qwen-3.5-2b-v2" "./new-shards/" --base "qwen-3.5-2b" --base-dir "./old-shards/"
 ```
 
 ---

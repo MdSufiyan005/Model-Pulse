@@ -56,7 +56,16 @@ Run a single prompt and exit immediately after receiving the response and report
 modelpulse bridge run http://<server-ip>:8000 --prompt "Explain quantum entanglement in one sentence."
 ```
 
-### Scenario 4: Performance Benchmarking
+### Scenario 4: Delta Updates (Hot-Patching)
+Test the efficient patching mechanism by uploading only changed tensors.
+1. Ensure a base model (e.g., `llama-3.2-1b`) is loaded.
+2. Run an auto-diff upload:
+   ```bash
+   ./upload_model.sh "llama-3.2-1b-d1" "./new-shards" --base "llama-3.2-1b" --base-dir "./old-shards"
+   ```
+3. Observe the bridge downloading only the changed shards and patching the loaded model **without a full reload**.
+
+### Scenario 5: Performance Benchmarking
 Run the built-in benchmark suite to measure TTFT, throughput (tok/s), and resource usage.
 
 ```bash

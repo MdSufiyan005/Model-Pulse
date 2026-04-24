@@ -1,5 +1,24 @@
 """
 Device B (Client) CLI — clean TUI.
+
+Delta support (v0.3.0)
+  The client maintains an in-memory shard cache keyed by model_id:
+
+      _shard_cache: dict[str, dict[str, bytes]]
+          model_id → { shard_name: raw_bytes }
+
+  On a full model_ready:
+      • Fetch all shards from /shards/*.shard  (unchanged)
+      • Store a deep copy in _shard_cache[model_id]
+      • Build ShardBridge, load, infer / benchmark
+
+  On a delta model_ready:
+      • Verify the base model is still cached
+      • Fetch only changed shards from /shards/delta/{model_id}/*
+      • Clone the base shard cache → patch changed entries → store as new model_id
+      • Call bridge.apply_delta(patches) — reassembles + reloads in-process
+        (no re-download of unchanged shards, no full bridge teardown)
+      • Infer / benchmark as usual
 """
 
 from __future__ import annotations
@@ -28,20 +47,21 @@ from modelpulse.client.benchmarks import (
 from modelpulse.shared.models import InferenceMetrics, ShardManifest
 from modelpulse.shared.ws_protocol import MsgType, WsMessage
 
-#  Sentinel for disconnect
+# Sentinel for disconnect
 _DISCONNECT = object()
 
-#  Theme
+# Theme
 _THEME = Theme(
     {
-        "ok":   "green",
-        "warn": "yellow",
-        "err":  "bold red",
-        "step": "bold white",
-        "val":  "cyan",
-        "dim":  "dim white",
-        "hdr":  "bold white",
+        "ok":    "green",
+        "warn":  "yellow",
+        "err":   "bold red",
+        "step":  "bold white",
+        "val":   "cyan",
+        "dim":   "dim white",
+        "hdr":   "bold white",
         "trunc": "yellow",
+        "delta": "bold magenta",   # new: highlights delta events
     }
 )
 
@@ -52,11 +72,12 @@ app = typer.Typer(name="bridge", add_completion=False)
 
 # Helpers
 
-def _ok(msg: str)   -> None: console.print(f"[ok]✓[/ok] {msg}")
-def _step(msg: str) -> None: console.print(f"[step]> {msg}[/step]")
-def _warn(msg: str) -> None: console.print(f"[warn]⚠ {msg}[/warn]")
-def _err(msg: str)  -> None: error_console.print(f"[err]✗ {msg}[/err]")
-def _rule()         -> None: console.print(Rule(style="dim"))
+def _ok(msg: str)    -> None: console.print(f"[ok]✓[/ok] {msg}")
+def _step(msg: str)  -> None: console.print(f"[step]> {msg}[/step]")
+def _warn(msg: str)  -> None: console.print(f"[warn]⚠ {msg}[/warn]")
+def _err(msg: str)   -> None: error_console.print(f"[err]✗ {msg}[/err]")
+def _delta(msg: str) -> None: console.print(f"[delta]Δ {msg}[/delta]")
+def _rule()          -> None: console.print(Rule(style="dim"))
 
 
 def _ram_warn(manifest: ShardManifest) -> None:
@@ -74,7 +95,6 @@ def _ram_warn(manifest: ShardManifest) -> None:
 
 
 def _ram_pct(used_mb: float, total_mb: float) -> str:
-    """Format RAM as 'used MB / total MB (pct%)'."""
     if total_mb > 0:
         pct = 100.0 * used_mb / total_mb
         return f"{used_mb:.0f} MB / {total_mb:.0f} MB ({pct:.1f}%)"
@@ -82,7 +102,6 @@ def _ram_pct(used_mb: float, total_mb: float) -> str:
 
 
 def _metrics_panel(metrics: InferenceMetrics) -> None:
-    """Display single-inference metrics."""
     table = Table(show_header=False, box=box.SIMPLE)
     table.add_row("  Load time",    f"[dim]{metrics.load_time_s:.2f} s[/dim]")
     table.add_row("  TTFT",         f"[dim]{metrics.time_to_first_tok_s:.3f} s[/dim]")
@@ -101,14 +120,6 @@ def _metrics_panel(metrics: InferenceMetrics) -> None:
 
 
 def _benchmark_panel(results: BenchmarkResults) -> None:
-    """
-    Display benchmark aggregate metrics + per-question breakdown.
-
-    Shows RAM utilisation as used/total (%), thermal throttle warning,
-    truncation count, and a clean tok/s figure that excludes truncated
-    questions so operators can see uncontaminated decode throughput.
-    """
-    #  Warnings
     if results.thermal_throttle_warning and results.cpu_temp_c is not None:
         _warn(
             f"CPU at {results.cpu_temp_c:.0f}°C — thermal throttling likely. "
@@ -123,13 +134,8 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
         )
         console.print()
 
-    # ── Aggregate summary  
     table = Table(show_header=False, box=box.SIMPLE)
-
-    table.add_row(
-        "  Questions",
-        f"[dim]{results.success_count}/{results.question_count}[/dim]",
-    )
+    table.add_row("  Questions",      f"[dim]{results.success_count}/{results.question_count}[/dim]")
     table.add_row("  Total tokens",   f"[dim]{results.total_tokens_generated}[/dim]")
     table.add_row("  Avg tok/q",      f"[dim]{results.avg_tokens_per_question:.1f}[/dim]")
     table.add_row("  Agg. tok/s",     f"[dim]{results.avg_tokens_per_sec:.1f} tok/s[/dim]")
@@ -169,7 +175,6 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
 
     console.print(table)
 
-    #   Per-question breakdown 
     if results.question_results:
         console.print()
         console.print("  [hdr]per-question breakdown[/hdr]")
@@ -177,15 +182,13 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
 
         q_table = Table(
             "q", "tok/s", "tokens", "budget", "latency", "TTFT", "flags",
-            box=box.SIMPLE,
-            show_header=True,
-            header_style="bold white",
+            box=box.SIMPLE, show_header=True, header_style="bold white",
         )
 
         for qr in results.question_results:
             flags = ""
             if qr.truncated:
-                flags += "[trunc]T[/trunc] "   # hit token budget
+                flags += "[trunc]T[/trunc] "
             if qr.timed_out:
                 flags += "[warn]timeout[/warn] "
             if qr.error:
@@ -194,13 +197,8 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
 
             if qr.timed_out or qr.error:
                 q_table.add_row(
-                    f"q{qr.index + 1}",
-                    "[dim]—[/dim]",
-                    "[dim]—[/dim]",
-                    str(qr.max_tokens_used),
-                    "[dim]—[/dim]",
-                    "[dim]—[/dim]",
-                    flags,
+                    f"q{qr.index + 1}", "[dim]—[/dim]", "[dim]—[/dim]",
+                    str(qr.max_tokens_used), "[dim]—[/dim]", "[dim]—[/dim]", flags,
                 )
             else:
                 q_table.add_row(
@@ -215,7 +213,6 @@ def _benchmark_panel(results: BenchmarkResults) -> None:
 
         console.print(q_table)
 
-        # Legend
         if results.truncated_count:
             console.print(
                 "  [dim][trunc]T[/trunc] = hit token budget (response may be incomplete)[/dim]"
@@ -288,42 +285,28 @@ async def _send_metrics(
         _warn(f"could not send metrics: {exc}")
 
 
-#   CLI Command   
+# CLI Command
 
 @app.command()
 def run(
     host: str,
     prompt: Optional[str] = None,
-    benchmark: bool = typer.Option(
-        False, "--benchmark", "-b",
-        help="Run the built-in benchmark suite",
-    ),
-    max_tokens: Optional[int] = typer.Option(
-        None, "--max-tokens", "-m",
-        help=(
-            "Token budget per question. When omitted the suite uses "
-            "per-question defaults (recommended)."
-        ),
-    ),
+    benchmark: bool = typer.Option(False, "--benchmark", "-b", help="Run the built-in benchmark suite"),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens", "-m"),
     temperature: float = 0.7,
     n_ctx: int = 2048,
-    perplexity: bool = typer.Option(
-        False, "--perplexity", "-p",
-        help="Compute perplexity during benchmark (requires logits_all=True)",
-    ),
+    perplexity: bool = typer.Option(False, "--perplexity", "-p"),
 ):
     asyncio.run(
-        _run_ws_async(
-            host, prompt, benchmark, max_tokens, temperature, n_ctx, perplexity
-        )
+        _run_ws_async(host, prompt, benchmark, max_tokens, temperature, n_ctx, perplexity)
     )
 
 
-# Core Logic 
+# Core Logic
 
 def _header() -> None:
     console.print()
-    console.print("  [hdr]◆ modelpulse bridge[/hdr]  [dim]v0.2.0[/dim]")
+    console.print("  [hdr]◆ modelpulse bridge[/hdr]  [dim]v0.3.0[/dim]")
     console.print()
 
 
@@ -342,6 +325,13 @@ async def _run_ws_async(
     client_id = f"bridge-{os.getpid()}"
     model_queue: asyncio.Queue = asyncio.Queue()
 
+    # In-memory shard cache
+    # Keyed by model_id.  Each value is a shallow dict[shard_name, bytes].
+    # On a full update we store a *copy* so that a subsequent delta can
+    # clone from the base without being affected by any in-place mutations
+    # that apply_delta() makes to the live bridge's shard_data.
+    _shard_cache: dict[str, dict[str, bytes]] = {}
+
     _step(f"connecting to [val]{host}[/val]")
     try:
         async with websockets.connect(
@@ -356,13 +346,13 @@ async def _run_ws_async(
             console.print()
 
             await ws.send(
-                WsMessage.hello(client_id, capabilities={"version": "0.2.0"}).to_json()
+                WsMessage.hello(client_id, capabilities={"version": "0.3.0"}).to_json()
             )
 
             listener_task = asyncio.create_task(_ws_listener(ws, model_queue))
 
-            current_bridge: Optional[ShardBridge] = None
-            current_model_id: str = ""
+            current_bridge: Optional[ShardBridge]  = None
+            current_model_id: str                   = ""
 
             try:
                 while True:
@@ -372,192 +362,64 @@ async def _run_ws_async(
                         _warn("connection lost — exiting (restart to reconnect)")
                         break
 
-                    model_id = model_msg.payload.get("model_id", "")
+                    model_id      = model_msg.payload.get("model_id", "")
+                    update_type   = model_msg.payload.get("update_type", "full")
+                    base_model_id = model_msg.payload.get("base_model_id")
 
                     try:
                         await ws.send(WsMessage.ack(model_msg.msg_id).to_json())
                     except Exception:
                         pass
 
+                    # Already loaded
                     if model_id and model_id == current_model_id and current_bridge:
                         _ok(f"model [dim]{model_id}[/dim] already loaded — resuming")
                         console.print()
+
+                    # Delta update
+                    elif update_type == "delta" and base_model_id:
+                        current_bridge, current_model_id = await _handle_delta(
+                            ws, host,
+                            model_id, base_model_id,
+                            current_bridge, current_model_id,
+                            _shard_cache,
+                            n_ctx, compute_perplexity,
+                        )
+                        if current_bridge is None:
+                            continue   # delta failed; keep listening
+
+                    # Full model
                     else:
                         if current_bridge is not None:
                             _rule()
                             _step("new model incoming — unloading current")
                             current_bridge.cleanup()
-                            current_bridge = None
+                            current_bridge   = None
                             current_model_id = ""
                             console.print()
 
-                        _step("fetching manifest from server…")
-                        try:
-                            async with ShardClient(host, timeout=30.0) as http:
-                                manifest = await http.fetch_manifest()
-                        except Exception as exc:
-                            _err(f"manifest fetch failed: {exc}")
-                            continue
-
-                        total_gb = manifest.total_bytes / 1e9
-                        _ok(
-                            f"[bold]{manifest.source_model}[/bold]  "
-                            f"[dim]{manifest.tensor_count} tensors · {total_gb:.2f} GB "
-                            f"· GGUF v{manifest.gguf_version}[/dim]"
+                        current_bridge, current_model_id = await _handle_full(
+                            ws, host,
+                            model_id,
+                            _shard_cache,
+                            n_ctx, compute_perplexity,
                         )
-                        console.print()
-                        _ram_warn(manifest)
-
-                        try:
-                            async with ShardClient(host, timeout=120.0) as http:
-                                shard_data = await _pull_shards(http, manifest)
-                        except Exception as exc:
-                            _err(f"shard download failed: {exc}")
-                            continue
-
-                        current_bridge = ShardBridge(
-                            manifest,
-                            shard_data,
-                            compute_perplexity=compute_perplexity,
-                        )
-                        del shard_data
-
-                        try:
-                            load_time = current_bridge.load(n_ctx=n_ctx, on_status=_step)
-                        except RuntimeError as exc:
-                            _err(str(exc))
-                            current_bridge.cleanup()
-                            current_bridge = None
-                            continue
-
-                        _ok(
-                            f"model loaded  "
-                            f"[dim]{load_time:.1f} s · "
-                            f"RAM +{current_bridge.ram_delta_mb:.0f} MB[/dim]"
-                        )
-                        current_model_id = model_id
+                        if current_bridge is None:
+                            continue   # full load failed; keep listening
 
                     _rule()
 
-                    # Benchmark
+                    # Inference / benchmark
                     if benchmark:
-                        console.print()
-                        budget_note = (
-                            f"max_tokens={max_tokens} (override)"
-                            if max_tokens is not None
-                            else "per-question budgets"
+                        await _do_benchmark(
+                            ws, host, current_model_id, current_bridge,
+                            max_tokens, temperature, compute_perplexity,
                         )
-                        _step(
-                            f"running benchmark suite "
-                            f"({len(BENCHMARK_QUESTIONS)} questions · {budget_note})"
-                        )
-                        console.print()
-
-                        def _progress(cur: int, total: int, question: str) -> None:
-                            short_q = (question[:60] + "…") if len(question) > 60 else question
-                            _step(f"[{cur}/{total}] {short_q}")
-
-                        try:
-                            bench_results, _all_metrics = await run_benchmark(
-                                current_bridge,
-                                questions=BENCHMARK_QUESTIONS,
-                                max_tokens=max_tokens,   # None → per-question defaults
-                                temperature=temperature,
-                                on_progress=_progress,
-                            )
-                        except Exception as exc:
-                            console.print()
-                            _err(f"benchmark failed: {exc}")
-                            continue
-
-                        console.print()
-
-                        # One-line summary with key signals
-                        summary_parts = [
-                            f"{bench_results.total_tokens_generated} tokens",
-                            f"{bench_results.avg_tokens_per_sec:.1f} tok/s",
-                            f"avg TTFT {bench_results.avg_ttft_s:.3f} s",
-                            f"p95 lat {bench_results.p95_latency_s:.3f} s",
-                        ]
-                        if bench_results.truncated_count:
-                            summary_parts.append(
-                                f"[warn]{bench_results.truncated_count} truncated[/warn]"
-                            )
-                        if bench_results.thermal_throttle_warning:
-                            summary_parts.append(
-                                f"[warn]thermal {bench_results.cpu_temp_c:.0f}°C[/warn]"
-                            )
-                        _ok("[dim]" + " · ".join(summary_parts) + "[/dim]")
-
-                        metrics_to_send = bench_results.to_inference_metrics()
-                        await _send_metrics(ws, host, current_model_id, metrics_to_send)
-
-                        _rule()
-                        console.print("  [hdr]benchmark metrics[/hdr]")
-                        console.print()
-                        _benchmark_panel(bench_results)
-                        _rule()
-                        console.print()
-
-                        _step("listening for server updates…")
-                        console.print()
-                        continue
-
-                    #  Single prompt
                     elif prompt is not None:
-                        effective_tokens = max_tokens if max_tokens is not None else 256
-                        console.print()
-                        _step("generating")
-                        console.print()
-                        console.print("  ", end="")
-
-                        def _on_token(tok: str) -> None:
-                            console.print(
-                                tok.replace("\n", "\n  "), end="", highlight=False
-                            )
-
-                        try:
-                            _output, metrics = current_bridge.infer(
-                                prompt,
-                                max_tokens=effective_tokens,
-                                temperature=temperature,
-                                on_token=_on_token,
-                            )
-                        except Exception as exc:
-                            console.print()
-                            _err(f"inference failed: {exc}")
-                            continue
-
-                        console.print()
-                        console.print()
-                        _ok(
-                            f"[dim]{metrics.tokens_generated} tokens · "
-                            f"{metrics.tokens_per_sec:.1f} tok/s · "
-                            f"TTFT {metrics.time_to_first_tok_s:.3f} s[/dim]"
+                        await _do_infer(
+                            ws, host, current_model_id, current_bridge,
+                            prompt, max_tokens, temperature,
                         )
-
-                        if (
-                            metrics.cpu_temp_c is not None
-                            and metrics.cpu_temp_c >= 80.0
-                        ):
-                            _warn(
-                                f"CPU at {metrics.cpu_temp_c:.0f}°C — "
-                                "thermal throttling may be depressing tok/s"
-                            )
-
-                        await _send_metrics(ws, host, current_model_id, metrics)
-
-                        _rule()
-                        console.print("  [hdr]metrics[/hdr]")
-                        console.print()
-                        _metrics_panel(metrics)
-                        _rule()
-                        console.print()
-
-                        _step("listening for server updates…")
-                        console.print()
-                        continue
-
                     else:
                         _step("listening for server updates…")
                         console.print()
@@ -585,7 +447,299 @@ async def _run_ws_async(
     console.print()
 
 
-#  Shard Pull 
+# Full model handler
+
+async def _handle_full(
+    ws,
+    host: str,
+    model_id: str,
+    shard_cache: dict[str, dict[str, bytes]],
+    n_ctx: int,
+    compute_perplexity: bool,
+) -> tuple[Optional[ShardBridge], str]:
+    """
+    Fetch manifest + all shards, build ShardBridge, populate shard_cache.
+    Returns (bridge, model_id) on success or (None, "") on failure.
+    """
+    _step("fetching manifest from server…")
+    try:
+        async with ShardClient(host, timeout=30.0) as http:
+            manifest = await http.fetch_manifest()
+    except Exception as exc:
+        _err(f"manifest fetch failed: {exc}")
+        return None, ""
+
+    total_gb = manifest.total_bytes / 1e9
+    _ok(
+        f"[bold]{manifest.source_model}[/bold]  "
+        f"[dim]{manifest.tensor_count} tensors · {total_gb:.2f} GB "
+        f"· GGUF v{manifest.gguf_version}[/dim]"
+    )
+    console.print()
+    _ram_warn(manifest)
+
+    try:
+        async with ShardClient(host, timeout=120.0) as http:
+            shard_data = await _pull_shards(http, manifest)
+    except Exception as exc:
+        _err(f"shard download failed: {exc}")
+        return None, ""
+
+    # Store a snapshot in the cache so delta updates can clone from it.
+    shard_cache[model_id] = dict(shard_data)   # shallow copy is enough
+
+    bridge = ShardBridge(manifest, shard_data, compute_perplexity=compute_perplexity)
+    del shard_data
+
+    try:
+        load_time = bridge.load(n_ctx=n_ctx, on_status=_step)
+    except RuntimeError as exc:
+        _err(str(exc))
+        bridge.cleanup()
+        return None, ""
+
+    _ok(
+        f"model loaded  "
+        f"[dim]{load_time:.1f} s · RAM +{bridge.ram_delta_mb:.0f} MB[/dim]"
+    )
+    return bridge, model_id
+
+
+# Delta handler
+
+async def _handle_delta(
+    ws,
+    host: str,
+    model_id: str,
+    base_model_id: str,
+    current_bridge: Optional[ShardBridge],
+    current_model_id: str,
+    shard_cache: dict[str, dict[str, bytes]],
+    n_ctx: int,
+    compute_perplexity: bool,
+) -> tuple[Optional[ShardBridge], str]:
+    """
+    Fetch only the changed shards and apply them to the live bridge via
+    bridge.apply_delta().  If the base is not cached or no bridge exists,
+    falls back to a full re-load.
+
+    Returns (bridge, new_model_id) on success or (None, "") on failure.
+    """
+    _delta(
+        f"delta update received  "
+        f"[dim]{base_model_id}[/dim] → [dim]{model_id}[/dim]"
+    )
+    console.print()
+
+    # Guard: we need both the base in cache and an active bridge
+    if base_model_id not in shard_cache or current_bridge is None:
+        _warn(
+            f"base model [dim]{base_model_id}[/dim] not in shard cache "
+            f"(cache keys: {list(shard_cache)}) — falling back to full load"
+        )
+        if current_bridge is not None:
+            current_bridge.cleanup()
+        return await _handle_full(
+            ws, host, model_id, shard_cache, n_ctx, compute_perplexity
+        )
+
+    # Fetch delta manifest + changed shards only
+    _step(f"fetching delta manifest for [val]{model_id}[/val]…")
+    try:
+        async with ShardClient(host, timeout=30.0) as http:
+            delta_manifest = await http.fetch_delta_manifest(model_id)
+    except Exception as exc:
+        _err(f"delta manifest fetch failed: {exc} — falling back to full load")
+        current_bridge.cleanup()
+        return await _handle_full(
+            ws, host, model_id, shard_cache, n_ctx, compute_perplexity
+        )
+
+    changed_names = list(delta_manifest.get("changed_shards", {}).keys())
+    iteration     = delta_manifest.get("iteration", "?")
+    _ok(
+        f"delta manifest  "
+        f"[dim]iteration={iteration} · {len(changed_names)} shard(s) changed[/dim]"
+    )
+    for name in changed_names:
+        console.print(f"  [dim]Δ {name}[/dim]")
+    console.print()
+
+    _step(f"downloading {len(changed_names)} updated shard(s)…")
+    try:
+        async with ShardClient(host, timeout=120.0) as http:
+            patches = await http.fetch_delta_shards(model_id, delta_manifest)
+    except Exception as exc:
+        _err(f"delta shard fetch failed: {exc} — falling back to full load")
+        current_bridge.cleanup()
+        return await _handle_full(
+            ws, host, model_id, shard_cache, n_ctx, compute_perplexity
+        )
+
+    _ok(
+        f"delta shards downloaded  "
+        f"[dim]{sum(len(v) for v in patches.values()) / 1e6:.1f} MB[/dim]"
+    )
+    console.print()
+
+    # Apply delta to the live bridge (reassembles + reloads in-process)
+    _step("applying delta to loaded model…")
+    try:
+        load_time = await asyncio.to_thread(
+            current_bridge.apply_delta,
+            patches,
+            n_ctx=n_ctx,
+            on_status=_step,
+        )
+    except Exception as exc:
+        _err(f"apply_delta failed: {exc} — falling back to full load")
+        current_bridge.cleanup()
+        return await _handle_full(
+            ws, host, model_id, shard_cache, n_ctx, compute_perplexity
+        )
+
+    # Update the shard cache: clone base → apply patches → save as new model_id.
+    # We clone the base cache entry (not the mutated bridge.shard_data) to keep
+    # the base snapshot clean for potential future deltas.
+    #
+    # NOTE: Normalize patch keys from filenames to tensor names first, so the
+    # cache remains consistent with the GGUF tensor names.
+    file_to_name = {s["file"]: name for name, s in current_bridge.manifest.shards.items()}
+    normalized_patches = {file_to_name.get(k, k): v for k, v in patches.items()}
+
+    new_cache: dict[str, bytes] = dict(shard_cache[base_model_id])
+    new_cache.update(normalized_patches)
+    shard_cache[model_id] = new_cache
+
+    _ok(
+        f"delta applied  "
+        f"[dim]{load_time:.1f} s · RAM +{current_bridge.ram_delta_mb:.0f} MB[/dim]"
+    )
+    console.print()
+
+    return current_bridge, model_id
+
+
+# Inference
+
+async def _do_infer(
+    ws,
+    host: str,
+    current_model_id: str,
+    bridge: ShardBridge,
+    prompt: str,
+    max_tokens: Optional[int],
+    temperature: float,
+) -> None:
+    effective_tokens = max_tokens if max_tokens is not None else 256
+    console.print()
+    _step("generating")
+    console.print()
+    console.print("  ", end="")
+
+    def _on_token(tok: str) -> None:
+        console.print(tok.replace("\n", "\n  "), end="", highlight=False)
+
+    try:
+        _output, metrics = bridge.infer(
+            prompt, max_tokens=effective_tokens, temperature=temperature, on_token=_on_token,
+        )
+    except Exception as exc:
+        console.print()
+        _err(f"inference failed: {exc}")
+        return
+
+    console.print()
+    console.print()
+    _ok(
+        f"[dim]{metrics.tokens_generated} tokens · "
+        f"{metrics.tokens_per_sec:.1f} tok/s · "
+        f"TTFT {metrics.time_to_first_tok_s:.3f} s[/dim]"
+    )
+
+    if metrics.cpu_temp_c is not None and metrics.cpu_temp_c >= 80.0:
+        _warn(f"CPU at {metrics.cpu_temp_c:.0f}°C — thermal throttling may be depressing tok/s")
+
+    await _send_metrics(ws, host, current_model_id, metrics)
+
+    _rule()
+    console.print("  [hdr]metrics[/hdr]")
+    console.print()
+    _metrics_panel(metrics)
+    _rule()
+    console.print()
+    _step("listening for server updates…")
+    console.print()
+
+
+# Benchmark
+
+async def _do_benchmark(
+    ws,
+    host: str,
+    current_model_id: str,
+    bridge: ShardBridge,
+    max_tokens: Optional[int],
+    temperature: float,
+    compute_perplexity: bool,
+) -> None:
+    console.print()
+    budget_note = (
+        f"max_tokens={max_tokens} (override)"
+        if max_tokens is not None
+        else "per-question budgets"
+    )
+    _step(
+        f"running benchmark suite "
+        f"({len(BENCHMARK_QUESTIONS)} questions · {budget_note})"
+    )
+    console.print()
+
+    def _progress(cur: int, total: int, question: str) -> None:
+        short_q = (question[:60] + "…") if len(question) > 60 else question
+        _step(f"[{cur}/{total}] {short_q}")
+
+    try:
+        bench_results, _all_metrics = await run_benchmark(
+            bridge,
+            questions=BENCHMARK_QUESTIONS,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            on_progress=_progress,
+        )
+    except Exception as exc:
+        console.print()
+        _err(f"benchmark failed: {exc}")
+        return
+
+    console.print()
+
+    summary_parts = [
+        f"{bench_results.total_tokens_generated} tokens",
+        f"{bench_results.avg_tokens_per_sec:.1f} tok/s",
+        f"avg TTFT {bench_results.avg_ttft_s:.3f} s",
+        f"p95 lat {bench_results.p95_latency_s:.3f} s",
+    ]
+    if bench_results.truncated_count:
+        summary_parts.append(f"[warn]{bench_results.truncated_count} truncated[/warn]")
+    if bench_results.thermal_throttle_warning:
+        summary_parts.append(f"[warn]thermal {bench_results.cpu_temp_c:.0f}°C[/warn]")
+    _ok("[dim]" + " · ".join(summary_parts) + "[/dim]")
+
+    metrics_to_send = bench_results.to_inference_metrics()
+    await _send_metrics(ws, host, current_model_id, metrics_to_send)
+
+    _rule()
+    console.print("  [hdr]benchmark metrics[/hdr]")
+    console.print()
+    _benchmark_panel(bench_results)
+    _rule()
+    console.print()
+    _step("listening for server updates…")
+    console.print()
+
+
+# Shard Pull
 
 async def _pull_shards(
     client: ShardClient,
