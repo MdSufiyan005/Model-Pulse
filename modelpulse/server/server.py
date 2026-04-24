@@ -282,13 +282,13 @@ def create_app(
 
     @app.get("/results")
     def get_all_results():
-        if not metrics_log.exists():
-            return []
-        return [
-            json.loads(l)
-            for l in metrics_log.read_text(encoding="utf-8").splitlines()
-            if l.strip()
-        ]
+            if not metrics_log.exists():
+                return []
+            return [
+                json.loads(l)
+                for l in metrics_log.read_text(encoding="utf-8").splitlines()
+                if l.strip()
+            ]
 
     @app.get("/results/latest")
     def get_latest_result():
@@ -765,7 +765,7 @@ def run(
     ),
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(8000),
-    metrics_log: Path = typer.Option(Path("metrics.jsonl")),
+    log_dir: Optional[Path] = typer.Option(None, "--log-dir", help="Directory to save metrics.jsonl. Defaults to current directory."),
     ping_interval: float = typer.Option(PING_INTERVAL),
     reload: bool = typer.Option(False, "--reload"),
 ):
@@ -775,7 +775,25 @@ def run(
     )
     shard_dir = shard_dir.resolve()
     shard_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve metrics log path
+    if log_dir is not None:
+        log_dir = Path(log_dir).resolve()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        metrics_log = log_dir / "metrics.jsonl"
+    else:
+        metrics_log = Path("metrics.jsonl").resolve()
+
     app = create_app(shard_dir, metrics_log, port=port, ping_interval=ping_interval)
+
+    _console.print(Panel(
+        f"[bold]Shard dir[/bold]   : [cyan]{shard_dir}[/cyan]\n"
+        f"[bold]Metrics log[/bold] : [cyan]{metrics_log}[/cyan]\n"
+        f"[bold]Listening[/bold]   : [green]http://{host}:{port}[/green]",
+        title="[bold blue]ModelPulse Server[/bold blue]",
+        border_style="blue",
+    ))
+
     uvicorn.run(app, host=host, port=port, reload=reload, log_level="info")
 
 

@@ -14,10 +14,10 @@ modelpulse server convert path/to/model.gguf ./my-shards/
 ```
 
 ### Terminal 1: Start the Control Plane (Server)
-Start the server to manage model distribution and telemetry. It will automatically create a `./models-storage` directory.
+Start the server to manage model distribution and telemetry. Use `--log-dir` to specify where `metrics.jsonl` is saved.
 
 ```bash
-modelpulse server run --host 0.0.0.0 --port 8000
+modelpulse server run --host 0.0.0.0 --port 8000 --log-dir ./results
 ```
 
 ### Terminal 2: Start the Bridge (Client)

@@ -87,10 +87,10 @@ modelpulse server convert my_model.gguf ./my-shards/
 ```
 
 ### 2. Start the Server
-Start the control plane on Device A. It will default to using `./models-storage` for storing model data.
+Start the control plane on Device A. Use `--log-dir` to specify where inference metrics are saved.
 
 ```bash
-modelpulse server run --host 0.0.0.0 --port 8000
+modelpulse server run --host 0.0.0.0 --port 8000 --log-dir ./results
 ```
 
 ### 3. Run the Bridge
@@ -123,7 +123,7 @@ Start the FastAPI control plane.
 | `--shard-dir`, `-d` | `./models-storage` | Root directory for model storage |
 | `--host` | `127.0.0.1` | Bind address |
 | `--port` | `8000` | Listening port |
-| `--metrics-log` | `metrics.jsonl` | File to append received telemetry |
+| `--log-dir` | Current directory | Directory to save `metrics.jsonl` |
 
 ### `modelpulse server upload`
 Upload models or delta patches to the control plane.
