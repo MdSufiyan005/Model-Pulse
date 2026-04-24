@@ -14,13 +14,18 @@ import struct
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 import typer
 import uvicorn
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, MofNCompleteColumn
+
+from modelpulse.server.sharder.converter import convert as run_convert
 
 from modelpulse.shared.ws_protocol import MsgType, WsMessage
 
@@ -772,6 +777,234 @@ def run(
     shard_dir.mkdir(parents=True, exist_ok=True)
     app = create_app(shard_dir, metrics_log, port=port, ping_interval=ping_interval)
     uvicorn.run(app, host=host, port=port, reload=reload, log_level="info")
+
+
+def _get_fast_id(p: Path) -> str:
+    """Return size-hash(head) for fast comparison."""
+    if not p.is_file():
+        return "MISSING"
+    size = p.stat().st_size
+    with open(p, "rb") as f:
+        head = f.read(65536)
+        h = hashlib.sha256(head).hexdigest()
+    return f"{size}-{h}"
+
+
+@cli.command()
+def upload(
+    model_id: str = typer.Argument(..., help="Model ID slug (e.g. 'llama-3-8b')"),
+    paths: list[Path] = typer.Argument(..., help="Directory or shard files to upload"),
+    base: Optional[str] = typer.Option(None, "--base", help="Base model ID for delta update"),
+    base_dir: Optional[Path] = typer.Option(None, "--base-dir", help="Old shard directory for auto-diff"),
+    server: str = typer.Option("http://127.0.0.1:8000", "--server", help="Server URL"),
+):
+    """
+    Upload a model or delta update to the ModelPulse server.
+    """
+    server = server.rstrip("/")
+    
+    # 1. Mode Selection
+    if base:
+        # DELTA MODE
+        mode = "DELTA"
+        shards_to_upload: list[Path] = []
+        
+        if len(paths) == 1 and paths[0].is_dir():
+            # Auto-Diff Mode
+            new_dir = paths[0]
+            _console.print(f"[bold blue]Mode:[/bold blue] Auto-Diff Delta Upload")
+            _console.print(f"[bold blue]Base Model:[/bold blue] {base}")
+            
+            if not base_dir:
+                _console.print("[red]Error: --base-dir is required for directory comparison.[/red]")
+                raise typer.Exit(1)
+            
+            _console.print(f"[dim]Comparing {new_dir} vs {base_dir}...[/dim]")
+            
+            # Find changed/new shards
+            for shard in sorted(new_dir.glob("*.shard")):
+                fname = shard.name
+                old_shard = base_dir / fname
+                
+                new_id = _get_fast_id(shard)
+                if old_shard.exists():
+                    old_id = _get_fast_id(old_shard)
+                    if new_id == old_id:
+                        _console.print(f"  [dim]SKIPPED  {fname} (identical)[/dim]")
+                    else:
+                        _console.print(f"  [green]CHANGED  {fname}[/green]")
+                        shards_to_upload.append(shard)
+                else:
+                    _console.print(f"  [yellow]NEW      {fname}[/yellow]")
+                    shards_to_upload.append(shard)
+        else:
+            # Manual Mode
+            mode = "DELTA"
+            _console.print(f"[bold blue]Mode:[/bold blue] Manual Delta Upload")
+            for p in paths:
+                if p.is_file():
+                    shards_to_upload.append(p)
+                else:
+                    _console.print(f"[red]Error: File not found: {p}[/red]")
+                    raise typer.Exit(1)
+                    
+        if not shards_to_upload:
+            _console.print("[green]No changes detected. Nothing to upload.[/green]")
+            return
+
+        endpoint = "/models/delta"
+        params = {"model_id": model_id, "base_model_id": base}
+        files = [("shards", (p.name, open(p, "rb"), "application/octet-stream")) for p in shards_to_upload]
+        upload_desc = f"{len(shards_to_upload)} changed shards"
+    else:
+        # FULL MODE
+        mode = "FULL"
+        if len(paths) != 1 or not paths[0].is_dir():
+            _console.print("[red]Error: For full upload, provide exactly one directory containing manifest.json and .shard files.[/red]")
+            raise typer.Exit(1)
+            
+        shard_dir = paths[0]
+        manifest_path = shard_dir / "manifest.json"
+        if not manifest_path.exists():
+            _console.print(f"[red]Error: manifest.json not found in {shard_dir}[/red]")
+            raise typer.Exit(1)
+            
+        shards = sorted(shard_dir.glob("*.shard"))
+        if not shards:
+            _console.print(f"[red]Error: No .shard files found in {shard_dir}[/red]")
+            raise typer.Exit(1)
+            
+        _console.print(f"[bold blue]Mode:[/bold blue] Full Baseline Upload")
+        endpoint = "/models/upload"
+        params = {"model_id": model_id}
+        files = [
+            ("manifest", ("manifest.json", open(manifest_path, "rb"), "application/json")),
+        ]
+        for p in shards:
+            files.append(("shards", (p.name, open(p, "rb"), "application/octet-stream")))
+        upload_desc = f"{len(shards)} shards + manifest"
+
+    # 2. Summary
+    table_content = f"""[bold white]Model ID:[/bold white]      [cyan]{model_id}[/cyan]
+"""
+    if base:
+        table_content += f"[bold white]Base Model:[/bold white]    [dim]{base}[/dim]\n"
+    table_content += f"""[bold white]Server:[/bold white]        [dim]{server}[/dim]
+[bold white]Uploading:[/bold white]     {upload_desc}
+"""
+    _console.print(Panel(table_content.strip(), title="Upload Summary", border_style="blue"))
+    _console.print()
+
+    # 3. Execution
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            transient=True,
+        ) as progress:
+            progress.add_task(description="Uploading...", total=None)
+            
+            with httpx.Client(timeout=None) as client:
+                resp = client.post(f"{server}{endpoint}", data=params, files=files)
+                resp.raise_for_status()
+                result = resp.json()
+
+        # 4. Success Handling
+        status = result.get("status", "unknown")
+        notified = result.get("clients_notified", 0)
+        
+        if status in ("uploaded", "delta_uploaded"):
+            _console.print("[bold green]✅ SUCCESS[/bold green]")
+            
+            summary_info = f"[bold]Model ID:[/bold]         [cyan]{model_id}[/cyan]\n"
+            summary_info += f"[bold]Update Type:[/bold]      {mode}\n"
+            summary_info += f"[bold]Clients Notified:[/bold] {notified}"
+            
+            _console.print(Panel(summary_info, border_style="green"))
+            
+            if notified > 0:
+                _console.print("\n[bold]Connected client(s) will automatically:[/bold]")
+                if mode == "DELTA":
+                    _console.print("  1. Fetch ONLY the changed shards")
+                    _console.print("  2. Patch the existing model in memory")
+                else:
+                    _console.print("  1. Download the new shards")
+                    _console.print("  2. Load the new model")
+                _console.print("  3. Be ready for inference")
+                _console.print("\n[bold cyan]No client restart needed! ✨[/bold cyan]")
+            else:
+                _console.print("\n[yellow]⚠ No clients currently connected.[/yellow]")
+                _console.print("   They will load the model when they connect.")
+            
+            _console.print(f"\n[dim]Run on server to check:[/dim]")
+            _console.print(f"  [dim]curl {server}/results/latest | jq  # View metrics[/dim]")
+            _console.print(f"  [dim]curl {server}/ws/clients | jq      # Check connected clients[/dim]\n")
+            
+        else:
+            _console.print("[red]Upload failed[/red]")
+            _console.print(result)
+            raise typer.Exit(1)
+
+    except httpx.HTTPStatusError as exc:
+        _console.print(f"[red]Server returned error {exc.response.status_code}[/red]")
+        try:
+            _console.print(exc.response.json())
+        except:
+            _console.print(exc.response.text)
+        raise typer.Exit(1)
+    except Exception as exc:
+        _console.print(f"[red]Upload failed: {exc}[/red]")
+        raise typer.Exit(1)
+    finally:
+        # Close all opened files
+        for _, file_tuple in files:
+            file_tuple[1].close()
+
+
+@cli.command()
+def convert(
+    gguf_path: Path = typer.Argument(..., help="Path to the monolithic .gguf file", exists=True, dir_okay=False),
+    output_dir: Path = typer.Argument(..., help="Directory to store the generated shards"),
+):
+    """
+    Convert a monolithic GGUF file into tensor-level shards.
+    """
+    _console.print(f"\n[bold blue]Converting GGUF to Shards[/bold blue]")
+    _console.print(f"[dim]Source: {gguf_path}[/dim]")
+    _console.print(f"[dim]Output: {output_dir}[/dim]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            transient=False,
+        ) as progress:
+            task = progress.add_task(description="Extracting tensors...", total=0)
+
+            def on_status(msg: str):
+                _console.print(f"  [dim]• {msg}[/dim]")
+
+            def on_progress(cur: int, total: int, name: str):
+                progress.update(task, total=total, completed=cur, description=f"Shard: [cyan]{name}[/cyan]")
+
+            run_convert(
+                gguf_path,
+                output_dir,
+                on_status=on_status,
+                on_progress=on_progress
+            )
+
+        _console.print(f"\n[bold green]✅ Conversion complete![/bold green]")
+        _console.print(f"  Manifest written to: [cyan]{output_dir}/manifest.json[/cyan]\n")
+
+    except Exception as exc:
+        _console.print(f"[red]Conversion failed: {exc}[/red]")
+        raise typer.Exit(1)
 
 
 def main() -> None:

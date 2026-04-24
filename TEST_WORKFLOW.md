@@ -6,6 +6,13 @@ This guide provides a step-by-step workflow to test the ModelPulse end-to-end pi
 
 ## 🚀 Quick Start (5 Minutes)
 
+### Step 0: Prepare Shards
+Convert a monolithic `.gguf` file into a shard directory that can be served.
+
+```bash
+modelpulse server convert path/to/model.gguf ./my-shards/
+```
+
 ### Terminal 1: Start the Control Plane (Server)
 Start the server to manage model distribution and telemetry. It will automatically create a `./models-storage` directory.
 
@@ -25,8 +32,8 @@ modelpulse bridge run http://<server-ip>:8000
 Assign a model to the server. All connected bridges will instantly start pulling shards.
 
 ```bash
-# Usage: ./upload_model.sh <model_id> <shard_directory>
-./upload_model.sh "qwen-2.5-2b" "./path/to/my-shards"
+# Usage: modelpulse server upload <model_id> <shard_directory>
+modelpulse server upload "qwen-2.5-2b" "./path/to/my-shards"
 ```
 
 ---
@@ -43,7 +50,7 @@ modelpulse bridge run http://<server-ip>:8000
 ```
 
 ### Scenario 2: Dynamic Hot-Reload
-While a bridge is connected and a model is loaded, upload a **different** model via the upload script.
+While a bridge is connected and a model is loaded, upload a **different** model via the CLI.
 1. The server notifies the bridge.
 2. The bridge automatically unloads the old model.
 3. The bridge pulls the new manifest and shards.
@@ -61,7 +68,7 @@ Test the efficient patching mechanism by uploading only changed tensors.
 1. Ensure a base model (e.g., `llama-3.2-1b`) is loaded.
 2. Run an auto-diff upload:
    ```bash
-   ./upload_model.sh "llama-3.2-1b-d1" "./new-shards" --base "llama-3.2-1b" --base-dir "./old-shards"
+   modelpulse server upload "llama-3.2-1b-d1" "./new-shards" --base "llama-3.2-1b" --base-dir "./old-shards"
    ```
 3. Observe the bridge downloading only the changed shards and patching the loaded model **without a full reload**.
 
@@ -106,7 +113,7 @@ curl -X POST http://<server-ip>:8000/models/notify
 | Issue | Potential Cause | Fix |
 | :--- | :--- | :--- |
 | `Connection refused` | Server not running or wrong IP | Verify server status and firewall/Tailscale settings. |
-| `Stuck at "waiting..."` | No model active on server | Use `./upload_model.sh` to assign a model. |
+| `Stuck at "waiting..."` | No model active on server | Use `modelpulse server upload` to assign a model. |
 | `Out of memory` | Model too large for RAM | Use a higher quantization (e.g., Q4_K_M) or smaller parameter count. |
 | `No /dev/shm access` | Environment restrictions | ModelPulse will fallback to `/tmp`, though performance may decrease. |
 

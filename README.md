@@ -80,10 +80,10 @@ pip install git+https://github.com/MdSufiyan005/ModelPulse.git
 ## 🔄 Workflow
 
 ### 1. Prepare Shards
-Convert a monolithic `.gguf` file into a shard directory using the companion tool:
+Convert a monolithic `.gguf` file into a shard directory:
 
 ```bash
-python tools/gguf_to_shards.py convert my_model.gguf ./my-shards/
+modelpulse server convert my_model.gguf ./my-shards/
 ```
 
 ### 2. Start the Server
@@ -105,10 +105,10 @@ Upload your prepared shards to the server. All connected bridges will instantly 
 
 ```bash
 # Full Baseline Upload
-./upload_model.sh "qwen-3.5-2b" "./my-shards/"
+modelpulse server upload "qwen-3.5-2b" "./my-shards/"
 
 # Delta Update (Auto-Diff)
-./upload_model.sh "qwen-3.5-2b-v2" "./new-shards/" --base "qwen-3.5-2b" --base-dir "./old-shards/"
+modelpulse server upload "qwen-3.5-2b-v2" "./new-shards/" --base "qwen-3.5-2b" --base-dir "./old-shards/"
 ```
 
 ---
@@ -124,6 +124,25 @@ Start the FastAPI control plane.
 | `--host` | `127.0.0.1` | Bind address |
 | `--port` | `8000` | Listening port |
 | `--metrics-log` | `metrics.jsonl` | File to append received telemetry |
+
+### `modelpulse server upload`
+Upload models or delta patches to the control plane.
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `model_id` | (Required) | Unique slug for the new model |
+| `paths` | (Required) | Shard directory or list of .shard files |
+| `--base` | `None` | Base model ID for delta update |
+| `--base-dir` | `None` | Local directory of base model for auto-diff |
+| `--server` | `http://127.0.0.1:8000` | Target server URL |
+
+### `modelpulse server convert`
+Convert a monolithic GGUF file into tensor-level shards.
+
+| Argument | Description |
+| :--- | :--- |
+| `gguf_path` | Path to the monolithic .gguf file |
+| `output_dir` | Directory to store the generated shards |
 
 ### `modelpulse bridge run`
 Connect to a server and enter the inference loop.
@@ -158,7 +177,6 @@ modelpulse/
 ├── tools/                  # Model preparation utilities
 │   ├── gguf_to_shards.py   # GGUF → Shard converter (tensor-level)
 │   └── gguf_parser.py      # Low-level GGUF format metadata reader
-├── upload_model.sh         # Script for dynamic model assignment
 ├── TEST_WORKFLOW.md        # Step-by-step end-to-end testing guide
 ├── pyproject.toml          # Project metadata & dependencies
 └── metrics.jsonl           # Appends log for inference telemetry
